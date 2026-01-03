@@ -1,0 +1,214 @@
+# Redis Cluster Configuration (5 nodes)
+# This setup creates a Redis Cluster with 5 master nodes for high availability
+# and horizontal scaling. Each node handles a portion of the hash slots (0-16383).
+
+services:
+  # Redis Node 1
+  redis-node-1:
+    image: redis:7.4.1-alpine
+    container_name: redis-node-1
+    ports:
+      - "6379:6379"
+      - "16379:16379"  # Cluster bus port
+    command: >
+      redis-server
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
+      --appendonly yes
+      --port 6379
+      --cluster-announce-ip redis-node-1
+      --cluster-announce-port 6379
+      --cluster-announce-bus-port 16379
+    volumes:
+      - redis_node_1_data:/data
+    networks:
+      - microservices-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Redis Node 2
+  redis-node-2:
+    image: redis:7.4.1-alpine
+    container_name: redis-node-2
+    ports:
+      - "6380:6379"
+      - "16380:16379"  # Cluster bus port
+    command: >
+      redis-server
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
+      --appendonly yes
+      --port 6379
+      --cluster-announce-ip redis-node-2
+      --cluster-announce-port 6379
+      --cluster-announce-bus-port 16379
+    volumes:
+      - redis_node_2_data:/data
+    networks:
+      - microservices-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Redis Node 3
+  redis-node-3:
+    image: redis:7.4.1-alpine
+    container_name: redis-node-3
+    ports:
+      - "6381:6379"
+      - "16381:16379"  # Cluster bus port
+    command: >
+      redis-server
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
+      --appendonly yes
+      --port 6379
+      --cluster-announce-ip redis-node-3
+      --cluster-announce-port 6379
+      --cluster-announce-bus-port 16379
+    volumes:
+      - redis_node_3_data:/data
+    networks:
+      - microservices-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Redis Node 4
+  redis-node-4:
+    image: redis:7.4.1-alpine
+    container_name: redis-node-4
+    ports:
+      - "6382:6379"
+      - "16382:16379"  # Cluster bus port
+    command: >
+      redis-server
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
+      --appendonly yes
+      --port 6379
+      --cluster-announce-ip redis-node-4
+      --cluster-announce-port 6379
+      --cluster-announce-bus-port 16379
+    volumes:
+      - redis_node_4_data:/data
+    networks:
+      - microservices-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Redis Node 5
+  redis-node-5:
+    image: redis:7.4.1-alpine
+    container_name: redis-node-5
+    ports:
+      - "6383:6379"
+      - "16383:16379"  # Cluster bus port
+    command: >
+      redis-server
+      --cluster-enabled yes
+      --cluster-config-file nodes.conf
+      --cluster-node-timeout 5000
+      --appendonly yes
+      --port 6379
+      --cluster-announce-ip redis-node-5
+      --cluster-announce-port 6379
+      --cluster-announce-bus-port 16379
+    volumes:
+      - redis_node_5_data:/data
+    networks:
+      - microservices-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Cluster Initializer
+  # This service creates the cluster after all nodes are up
+  redis-cluster-init:
+    image: redis:7.4.1-alpine
+    container_name: redis-cluster-init
+    depends_on:
+      redis-node-1:
+        condition: service_healthy
+      redis-node-2:
+        condition: service_healthy
+      redis-node-3:
+        condition: service_healthy
+      redis-node-4:
+        condition: service_healthy
+      redis-node-5:
+        condition: service_healthy
+    networks:
+      - microservices-net
+    command: >
+      sh -c '
+        echo "Waiting for Redis nodes to be ready..."
+        sleep 5
+        echo "Creating Redis Cluster..."
+        redis-cli --cluster create 
+          redis-node-1:6379 
+          redis-node-2:6379 
+          redis-node-3:6379 
+          redis-node-4:6379 
+          redis-node-5:6379 
+          --cluster-replicas 0 
+          --cluster-yes
+        echo "Redis Cluster created successfully!"
+        echo "Cluster info:"
+        redis-cli -c -h redis-node-1 cluster info
+        echo "Cluster nodes:"
+        redis-cli -c -h redis-node-1 cluster nodes
+      '
+    restart: "no"
+
+  # Redis UI - Web interface for Redis Cluster management
+  redis-ui:
+    image: redis/redisinsight:2.70
+    container_name: redis-ui
+    depends_on:
+      - redis-node-1
+      - redis-node-2
+      - redis-node-3
+      - redis-node-4
+      - redis-node-5
+    ports:
+      - "8001:5540"
+    networks:
+      - microservices-net
+    volumes:
+      - redis_ui_data:/data
+
+networks:
+  microservices-net:
+    name: microservices-poc_microservices-net
+    external: true
+
+volumes:
+  redis_node_1_data:
+    driver: local
+  redis_node_2_data:
+    driver: local
+  redis_node_3_data:
+    driver: local
+  redis_node_4_data:
+    driver: local
+  redis_node_5_data:
+    driver: local
+  redis_ui_data:
+    driver: local

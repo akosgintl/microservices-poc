@@ -1,0 +1,92 @@
+syntax = "proto3";
+
+package userservice;
+
+// User Service - demonstrates gRPC for internal microservice communication
+service UserService {
+    // Unary RPC - Single request, single response
+    rpc GetUser(GetUserRequest) returns (User);
+    rpc CreateUser(CreateUserRequest) returns (User);
+    rpc UpdateUser(UpdateUserRequest) returns (User);
+    rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse);
+    
+    // Unary RPC - List with pagination
+    rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+    
+    // Server streaming - Stream multiple users
+    rpc StreamUsers(StreamUsersRequest) returns (stream User);
+    
+    // Authentication
+    rpc Authenticate(AuthRequest) returns (AuthResponse);
+}
+
+// User model
+message User {
+    string id = 1;
+    string name = 2;
+    string email = 3;
+    string role = 4;
+    string created_at = 5;
+    string updated_at = 6;
+    bool is_active = 7;
+}
+
+// Request/Response messages
+message GetUserRequest {
+    string id = 1;
+}
+
+message CreateUserRequest {
+    string name = 1;
+    string email = 2;
+    string password = 3;
+    string role = 4;
+}
+
+message UpdateUserRequest {
+    string id = 1;
+    optional string name = 2;
+    optional string email = 3;
+    optional string role = 4;
+    optional bool is_active = 5;
+}
+
+message DeleteUserRequest {
+    string id = 1;
+}
+
+message DeleteUserResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message ListUsersRequest {
+    int32 page = 1;
+    int32 page_size = 2;
+    optional string role_filter = 3;
+    optional bool active_only = 4;
+}
+
+message ListUsersResponse {
+    repeated User users = 1;
+    int32 total = 2;
+    int32 page = 3;
+    int32 pages = 4;
+}
+
+message StreamUsersRequest {
+    optional string role_filter = 1;
+    optional bool active_only = 2;
+}
+
+message AuthRequest {
+    string email = 1;
+    string password = 2;
+}
+
+message AuthResponse {
+    bool success = 1;
+    string token = 2;
+    User user = 3;
+    string error = 4;
+}

@@ -1,0 +1,1160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Microservices Communication PoC</title>
+    <style>
+        :root {
+            --primary: #3b82f6;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --dark: #1f2937;
+            --light: #f3f4f6;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--light);
+            color: var(--dark);
+            line-height: 1.6;
+        }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        header {
+            background: var(--dark);
+            color: white;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+        }
+        header h1 { font-size: 1.5rem; margin-bottom: 5px; }
+        header p { opacity: 0.8; font-size: 0.9rem; }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+        }
+        .card {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .card-header {
+            padding: 15px 20px;
+            border-bottom: 1px solid var(--light);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .card-header h2 { font-size: 1.1rem; }
+        .badge {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .badge-rest { background: #dbeafe; color: #1d4ed8; }
+        .badge-grpc { background: #dcfce7; color: #166534; }
+        .badge-ws { background: #fef3c7; color: #92400e; }
+        .badge-sse { background: #fce7f3; color: #9d174d; }
+        .badge-kafka { background: #f3e8ff; color: #7c3aed; }
+        .card-body { padding: 20px; }
+        .form-group { margin-bottom: 15px; }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            font-size: 0.9rem;
+        }
+        input, select, textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 0.95rem;
+        }
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.95rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-primary { background: var(--primary); color: white; }
+        .btn-success { background: var(--success); color: white; }
+        .btn-danger { background: var(--danger); color: white; }
+        .btn-warning { background: var(--warning); color: white; }
+        .btn:hover { opacity: 0.9; transform: translateY(-1px); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-group { display: flex; gap: 10px; flex-wrap: wrap; }
+        .log-container {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 15px;
+            border-radius: 6px;
+            height: 300px;
+            overflow-y: auto;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.85rem;
+        }
+        .log-entry { margin-bottom: 5px; padding: 5px; border-radius: 3px; }
+        .log-entry.info { color: #9cdcfe; }
+        .log-entry.success { color: #4ec9b0; }
+        .log-entry.error { color: #f48771; }
+        .log-entry.event { color: #ce9178; }
+        .log-entry .timestamp { color: #6a9955; margin-right: 10px; }
+        .chat-messages {
+            height: 250px;
+            overflow-y: auto;
+            background: #fafafa;
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+        .chat-message {
+            margin-bottom: 10px;
+            padding: 8px 12px;
+            border-radius: 8px;
+            max-width: 80%;
+        }
+        .chat-message.self {
+            background: var(--primary);
+            color: white;
+            margin-left: auto;
+        }
+        .chat-message.other {
+            background: #e5e7eb;
+        }
+        .chat-message.system {
+            background: #fef3c7;
+            color: #92400e;
+            text-align: center;
+            max-width: 100%;
+            font-size: 0.85rem;
+        }
+        .chat-message.file {
+            background: #dbeafe;
+            border-left: 4px solid var(--primary);
+        }
+        .chat-message .sender {
+            font-weight: 600;
+            font-size: 0.8rem;
+            margin-bottom: 3px;
+        }
+        .file-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 5px;
+        }
+        .file-icon {
+            font-size: 2rem;
+        }
+        .file-details {
+            flex: 1;
+        }
+        .file-name {
+            font-weight: 600;
+            word-break: break-all;
+        }
+        .file-size {
+            font-size: 0.75rem;
+            color: #666;
+        }
+        .btn-download {
+            padding: 6px 12px;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .btn-download:hover {
+            opacity: 0.9;
+        }
+        .file-upload-area {
+            border: 2px dashed #ddd;
+            border-radius: 6px;
+            padding: 15px;
+            text-align: center;
+            margin-bottom: 15px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .file-upload-area:hover {
+            border-color: var(--primary);
+            background: #f8fafc;
+        }
+        .file-upload-area.dragover {
+            border-color: var(--primary);
+            background: #eff6ff;
+        }
+        .upload-progress {
+            margin-top: 10px;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e5e7eb;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            background: var(--primary);
+            transition: width 0.3s;
+        }
+        .upload-status {
+            font-size: 0.85rem;
+            color: #666;
+            margin-top: 5px;
+        }
+        .typing-indicator {
+            padding: 8px 12px;
+            color: #666;
+            font-style: italic;
+            font-size: 0.85rem;
+            animation: fadeInOut 1.5s infinite;
+        }
+        @keyframes fadeInOut {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; }
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .status-connected { background: var(--success); }
+        .status-disconnected { background: var(--danger); }
+        .status-connecting { background: var(--warning); animation: pulse 1s infinite; }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .notification-item {
+            padding: 12px;
+            border-left: 4px solid var(--primary);
+            background: white;
+            margin-bottom: 10px;
+            border-radius: 0 6px 6px 0;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .notification-item.order-created { border-color: var(--success); }
+        .notification-item.order-updated { border-color: var(--warning); }
+        .notification-item.order-cancelled { border-color: var(--danger); }
+        .notification-item h4 { font-size: 0.95rem; margin-bottom: 5px; }
+        .notification-item p { font-size: 0.85rem; color: #666; }
+        .input-row { display: flex; gap: 10px; }
+        .input-row input { flex: 1; }
+        .participants-container {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: auto;
+        }
+        .participant-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: var(--primary);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.75rem;
+            font-weight: 600;
+            position: relative;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        .participant-icon:hover {
+            transform: scale(1.1);
+        }
+        .participant-icon.self {
+            background: var(--success);
+            border: 2px solid #065f46;
+        }
+        .participant-icon[title]:hover::after {
+            content: attr(title);
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            margin-top: 5px;
+            padding: 4px 8px;
+            background: #1f2937;
+            color: white;
+            font-size: 0.75rem;
+            white-space: nowrap;
+            border-radius: 4px;
+            z-index: 1000;
+        }
+        .connection-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🔌 Microservices Communication PoC</h1>
+            <p>Interactive demonstration of REST, gRPC, WebSocket, SSE, and Kafka</p>
+        </header>
+
+        <div class="grid">
+            <!-- REST + gRPC: Users -->
+            <div class="card">
+                <div class="card-header">
+                    <h2>👤 Users API</h2>
+                    <div>
+                        <span class="badge badge-rest">REST</span>
+                        <span class="badge badge-grpc">gRPC</span>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label>Create New User</label>
+                        <div class="input-row">
+                            <input type="text" id="userName" placeholder="Name">
+                            <input type="email" id="userEmail" placeholder="Email">
+                        </div>
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn btn-primary" onclick="createUser()">Create User</button>
+                        <button class="btn btn-success" onclick="listUsers()">List Users</button>
+                    </div>
+                    <div class="log-container" id="userLog" style="margin-top: 15px; height: 200px;"></div>
+                </div>
+            </div>
+
+            <!-- REST + Kafka: Orders -->
+            <div class="card">
+                <div class="card-header">
+                    <h2>📦 Orders API</h2>
+                    <div>
+                        <span class="badge badge-rest">REST</span>
+                        <span class="badge badge-kafka">Kafka</span>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label>Create New Order</label>
+                        <div class="input-row">
+                            <input type="text" id="orderUserId" placeholder="User ID" value="user-1">
+                            <input type="text" id="orderProduct" placeholder="Product" value="Laptop">
+                        </div>
+                        <div class="input-row" style="margin-top: 10px;">
+                            <input type="number" id="orderQuantity" placeholder="Qty" value="1" min="1">
+                            <input type="number" id="orderPrice" placeholder="Price" value="999.99" step="0.01">
+                        </div>
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn btn-primary" onclick="createOrder()">Create Order</button>
+                        <button class="btn btn-success" onclick="listOrders()">List Orders</button>
+                    </div>
+                    <div class="log-container" id="orderLog" style="margin-top: 15px; height: 200px;"></div>
+                </div>
+            </div>
+
+            <!-- WebSocket Chat -->
+            <div class="card">
+                <div class="card-header">
+                    <h2>💬 Real-time Chat</h2>
+                    <div>
+                        <span class="badge badge-ws">WebSocket</span>
+                        <span id="chatStatus"><span class="status-indicator status-disconnected"></span>Disconnected</span>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <div class="input-row">
+                            <input type="text" id="chatRoom" placeholder="Room" value="general">
+                            <input type="text" id="chatUsername" placeholder="Username" value="user1">
+                        </div>
+                    </div>
+                    <div class="connection-controls" style="margin-bottom: 15px;">
+                        <div class="btn-group">
+                            <button class="btn btn-success" id="chatConnectBtn" onclick="connectChat()">Connect</button>
+                            <button class="btn btn-danger" id="chatDisconnectBtn" onclick="disconnectChat()" disabled>Disconnect</button>
+                        </div>
+                        <div class="participants-container" id="participantsContainer" style="display: none;">
+                        </div>
+                    </div>
+                    <div class="chat-messages" id="chatMessages"></div>
+                    <div class="file-upload-area" id="fileUploadArea" onclick="document.getElementById('fileInput').click()" style="display: none;">
+                        <input type="file" id="fileInput" style="display: none;" onchange="handleFileSelect(event)">
+                        <div id="uploadIcon">
+                            📎 Click or drag files here to upload
+                        </div>
+                        <div class="upload-progress" id="uploadProgress" style="display: none;">
+                            <div class="progress-bar">
+                                <div class="progress-fill" id="progressFill"></div>
+                            </div>
+                            <div class="upload-status" id="uploadStatus"></div>
+                        </div>
+                    </div>
+                    <div class="input-row">
+                        <input type="text" id="chatMessage" placeholder="Type a message..." oninput="handleTyping()" onkeypress="if(event.key==='Enter')sendMessage()">
+                        <button class="btn btn-primary" onclick="sendMessage()">Send</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SSE Notifications -->
+            <div class="card">
+                <div class="card-header">
+                    <h2>🔔 Live Notifications</h2>
+                    <div>
+                        <span class="badge badge-sse">SSE</span>
+                        <span class="badge badge-kafka">Kafka</span>
+                        <span id="sseStatus"><span class="status-indicator status-disconnected"></span>Disconnected</span>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="btn-group" style="margin-bottom: 15px;">
+                        <button class="btn btn-success" id="sseConnectBtn" onclick="connectSSE()">Start Listening</button>
+                        <button class="btn btn-danger" id="sseDisconnectBtn" onclick="disconnectSSE()" disabled>Stop</button>
+                        <button class="btn btn-warning" onclick="clearNotifications()">Clear</button>
+                    </div>
+                    <div id="notifications" style="height: 300px; overflow-y: auto;"></div>
+                </div>
+            </div>
+
+            <!-- Chat History from Persistence -->
+            <div class="card">
+                <div class="card-header">
+                    <h2>📚 Chat History</h2>
+                    <div>
+                        <span class="badge badge-rest">REST</span>
+                        <span class="badge badge-kafka">Cassandra</span>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label>Room</label>
+                        <input type="text" id="historyRoom" placeholder="Room name" value="general">
+                    </div>
+                    <div class="form-group">
+                        <label>Limit</label>
+                        <input type="number" id="historyLimit" placeholder="Number of messages" value="50" min="1" max="1000">
+                    </div>
+                    <div class="form-group">
+                        <label>Before Date (ISO format, optional)</label>
+                        <input type="datetime-local" id="historyBefore" placeholder="YYYY-MM-DDTHH:MM:SS">
+                    </div>
+                    <div class="btn-group" style="margin-bottom: 15px;">
+                        <button class="btn btn-primary" onclick="loadChatHistory()">Load History</button>
+                        <button class="btn btn-success" onclick="loadMessageCount()">Get Count</button>
+                        <button class="btn btn-warning" onclick="clearHistory()">Clear</button>
+                    </div>
+                    <div id="historyStats" style="padding: 10px; background: #f0f9ff; border-radius: 6px; margin-bottom: 10px; font-size: 0.9rem; display: none;">
+                        <strong>Message Count:</strong> <span id="messageCount">-</span>
+                    </div>
+                    <div class="log-container" id="historyLog" style="height: 200px;"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Combined Event Log -->
+        <div class="card" style="margin-top: 20px;">
+            <div class="card-header">
+                <h2>📊 Event Flow Log</h2>
+                <button class="btn btn-warning" onclick="clearEventLog()">Clear Log</button>
+            </div>
+            <div class="card-body">
+                <div class="log-container" id="eventLog" style="height: 250px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '';
+        let chatSocket = null;
+        let sseSource = null;
+        let currentUsername = '';
+        let typingTimer = null;
+        let typingUsers = new Set();
+        let roomParticipants = [];
+        const TYPING_TIMER_LENGTH = 2000; // Stop showing typing after 2s of inactivity
+        const CHUNK_SIZE = 1024 * 1024; // 1MB chunks for file upload
+
+        // Utility functions
+        function log(containerId, message, type = 'info') {
+            const container = document.getElementById(containerId);
+            const timestamp = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.innerHTML = `<span class="timestamp">[${timestamp}]</span>${message}`;
+            container.appendChild(entry);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function eventLog(message, type = 'info') {
+            log('eventLog', message, type);
+        }
+
+        // ===========================================
+        // REST API: Users (REST → gRPC internally)
+        // ===========================================
+        async function createUser() {
+            const name = document.getElementById('userName').value || 'Test User';
+            const email = document.getElementById('userEmail').value || `test${Date.now()}@example.com`;
+            
+            eventLog(`[REST→gRPC] Creating user: ${name}`, 'info');
+            log('userLog', `Creating user: ${name} (${email})...`, 'info');
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/users`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, email, password: 'password123', role: 'user' })
+                });
+                
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const user = await response.json();
+                
+                log('userLog', `✓ Created: ${user.name} (ID: ${user.id.slice(0, 8)}...)`, 'success');
+                eventLog(`[REST→gRPC] User created: ${user.id.slice(0, 8)}`, 'success');
+            } catch (err) {
+                log('userLog', `✗ Error: ${err.message}`, 'error');
+                eventLog(`[REST→gRPC] Error: ${err.message}`, 'error');
+            }
+        }
+
+        async function listUsers() {
+            eventLog('[REST→gRPC] Listing users...', 'info');
+            log('userLog', 'Fetching users...', 'info');
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/users`);
+                const data = await response.json();
+                
+                log('userLog', `Found ${data.total} users:`, 'success');
+                data.users.forEach(u => {
+                    log('userLog', `  • ${u.name} (${u.email}) - ${u.role}`, 'info');
+                });
+                eventLog(`[REST→gRPC] Listed ${data.total} users`, 'success');
+            } catch (err) {
+                log('userLog', `✗ Error: ${err.message}`, 'error');
+            }
+        }
+
+        // ===========================================
+        // REST API: Orders (triggers Kafka events)
+        // ===========================================
+        async function createOrder() {
+            const userId = document.getElementById('orderUserId').value;
+            const product = document.getElementById('orderProduct').value;
+            const quantity = parseInt(document.getElementById('orderQuantity').value);
+            const price = parseFloat(document.getElementById('orderPrice').value);
+            
+            eventLog(`[REST→Kafka] Creating order for ${product}...`, 'info');
+            log('orderLog', `Creating order: ${quantity}x ${product}...`, 'info');
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/orders`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: userId,
+                        items: [{ product, quantity, price }]
+                    })
+                });
+                
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const order = await response.json();
+                
+                log('orderLog', `✓ Created order ${order.id.slice(0, 8)}... Total: $${order.total}`, 'success');
+                eventLog(`[REST→Kafka] Order created → Kafka event published`, 'success');
+            } catch (err) {
+                log('orderLog', `✗ Error: ${err.message}`, 'error');
+            }
+        }
+
+        async function listOrders() {
+            eventLog('[REST] Listing orders...', 'info');
+            log('orderLog', 'Fetching orders...', 'info');
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/orders`);
+                const orders = await response.json();
+                
+                log('orderLog', `Found ${orders.length} orders:`, 'success');
+                orders.slice(0, 5).forEach(o => {
+                    log('orderLog', `  • ${o.id.slice(0, 8)}... - ${o.status} - $${o.total}`, 'info');
+                });
+                if (orders.length > 5) {
+                    log('orderLog', `  ... and ${orders.length - 5} more`, 'info');
+                }
+            } catch (err) {
+                log('orderLog', `✗ Error: ${err.message}`, 'error');
+            }
+        }
+
+        // ===========================================
+        // WebSocket: Real-time Chat
+        // ===========================================
+        function connectChat() {
+            const room = document.getElementById('chatRoom').value;
+            const username = document.getElementById('chatUsername').value;
+            currentUsername = username;
+            
+            // Clear chat messages box on connect
+            document.getElementById('chatMessages').innerHTML = '';
+            
+            // Clear typing users
+            typingUsers.clear();
+            
+            // Show file upload area
+            document.getElementById('fileUploadArea').style.display = 'block';
+            
+            const wsUrl = `ws://${window.location.host}/ws/chat/${room}?username=${username}`;
+            eventLog(`[WebSocket] Connecting to room "${room}" as "${username}"...`, 'info');
+            
+            updateChatStatus('connecting');
+            chatSocket = new WebSocket(wsUrl);
+            
+            chatSocket.onopen = () => {
+                updateChatStatus('connected');
+                eventLog(`[WebSocket] Connected to chat room "${room}"`, 'success');
+                document.getElementById('chatConnectBtn').disabled = true;
+                document.getElementById('chatDisconnectBtn').disabled = false;
+            };
+            
+            chatSocket.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                
+                if (data.type === 'history') {
+                    data.messages.forEach(m => addChatMessage(m));
+                } else if (data.type === 'users') {
+                    // Update participants list
+                    roomParticipants = data.users || [];
+                    updateParticipantsDisplay();
+                    eventLog(`[WebSocket] Users in room: ${data.users.join(', ')}`, 'info');
+                } else if (data.type === 'typing') {
+                    // Handle typing indicator
+                    handleTypingIndicator(data.username);
+                } else {
+                    addChatMessage(data);
+                    if (data.type === 'join' || data.type === 'leave') {
+                        eventLog(`[WebSocket] ${data.content}`, 'event');
+                    }
+                }
+            };
+            
+            chatSocket.onclose = () => {
+                updateChatStatus('disconnected');
+                eventLog('[WebSocket] Disconnected from chat', 'info');
+                document.getElementById('chatConnectBtn').disabled = false;
+                document.getElementById('chatDisconnectBtn').disabled = true;
+                // Hide participants display
+                document.getElementById('participantsContainer').style.display = 'none';
+                roomParticipants = [];
+            };
+            
+            chatSocket.onerror = (err) => {
+                eventLog('[WebSocket] Connection error', 'error');
+            };
+        }
+
+        async function disconnectChat() {
+            if (chatSocket) {
+                const room = document.getElementById('chatRoom').value;
+                const username = document.getElementById('chatUsername').value;
+                
+                // Hide file upload area
+                document.getElementById('fileUploadArea').style.display = 'none';
+                
+                // First, notify the server that user is leaving via REST API
+                try {
+                    await fetch(`${API_BASE}/api/chat/rooms/${room}/leave?username=${encodeURIComponent(username)}`, {
+                        method: 'POST'
+                    });
+                    eventLog(`[REST API] Notified server: ${username} left room ${room}`, 'info');
+                } catch (err) {
+                    eventLog(`[REST API] Failed to notify server: ${err.message}`, 'error');
+                }
+                
+                // Then close the WebSocket
+                chatSocket.close();
+                chatSocket = null;
+            }
+        }
+
+        function sendMessage() {
+            const input = document.getElementById('chatMessage');
+            const content = input.value.trim();
+            
+            if (content && chatSocket && chatSocket.readyState === WebSocket.OPEN) {
+                chatSocket.send(JSON.stringify({ content, type: 'message' }));
+                input.value = '';
+                
+                // Clear typing timer since we sent a message
+                clearTimeout(typingTimer);
+            }
+        }
+
+        function handleTyping() {
+            if (!chatSocket || chatSocket.readyState !== WebSocket.OPEN) {
+                return;
+            }
+            
+            const input = document.getElementById('chatMessage');
+            
+            // Only send typing indicator if there's text
+            if (input.value.trim().length > 0) {
+                // Send typing indicator
+                chatSocket.send(JSON.stringify({ 
+                    content: 'typing', 
+                    type: 'typing' 
+                }));
+                
+                // Clear previous timer
+                clearTimeout(typingTimer);
+                
+                // Set new timer to stop showing user is typing after inactivity
+                typingTimer = setTimeout(() => {
+                    // User stopped typing (no activity for 2 seconds)
+                }, TYPING_TIMER_LENGTH);
+            }
+        }
+
+        function handleTypingIndicator(username) {
+            // Don't show our own typing indicator
+            if (username === currentUsername) {
+                return;
+            }
+            
+            // Add user to typing set
+            typingUsers.add(username);
+            updateTypingDisplay();
+            
+            // Remove user from typing after 3 seconds
+            setTimeout(() => {
+                typingUsers.delete(username);
+                updateTypingDisplay();
+            }, 3000);
+        }
+
+        function updateTypingDisplay() {
+            const container = document.getElementById('chatMessages');
+            
+            // Remove existing typing indicator
+            const existingIndicator = container.querySelector('.typing-indicator');
+            if (existingIndicator) {
+                existingIndicator.remove();
+            }
+            
+            // Add new typing indicator if users are typing
+            if (typingUsers.size > 0) {
+                const div = document.createElement('div');
+                div.className = 'typing-indicator';
+                
+                const userList = Array.from(typingUsers);
+                if (userList.length === 1) {
+                    div.textContent = `${userList[0]} is typing...`;
+                } else if (userList.length === 2) {
+                    div.textContent = `${userList[0]} and ${userList[1]} are typing...`;
+                } else {
+                    div.textContent = `${userList[0]}, ${userList[1]} and ${userList.length - 2} others are typing...`;
+                }
+                
+                container.appendChild(div);
+                container.scrollTop = container.scrollHeight;
+            }
+        }
+
+        function addChatMessage(msg) {
+            // Skip invalid messages or typing indicators
+            if (!msg || !msg.content || msg.type === 'typing') {
+                return;
+            }
+            
+            const container = document.getElementById('chatMessages');
+            const div = document.createElement('div');
+            
+            if (msg.type === 'join' || msg.type === 'leave' || msg.type === 'system') {
+                div.className = 'chat-message system';
+                div.textContent = msg.content || '';
+            } else if (msg.type === 'file') {
+                // File message with download button
+                const isSelf = msg.username === currentUsername;
+                div.className = `chat-message file ${isSelf ? 'self' : 'other'}`;
+                const username = msg.username || 'Anonymous';
+                const fileName = msg.file_name || 'file';
+                const fileSize = formatFileSize(msg.file_size || 0);
+                
+                div.innerHTML = `
+                    <div class="sender">${username}</div>
+                    <div class="file-info">
+                        <div class="file-icon">📎</div>
+                        <div class="file-details">
+                            <div class="file-name">${fileName}</div>
+                            <div class="file-size">${fileSize}</div>
+                        </div>
+                        <a href="${msg.file_url}" target="_blank" class="btn-download" download="${fileName}">
+                            Download
+                        </a>
+                    </div>
+                `;
+            } else {
+                const isSelf = msg.username === currentUsername;
+                div.className = `chat-message ${isSelf ? 'self' : 'other'}`;
+                const username = msg.username || 'Anonymous';
+                const content = msg.content || '';
+                div.innerHTML = `<div class="sender">${username}</div>${content}`;
+            }
+            
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function updateChatStatus(status) {
+            const el = document.getElementById('chatStatus');
+            const statusClass = status === 'connected' ? 'status-connected' : 
+                               status === 'connecting' ? 'status-connecting' : 'status-disconnected';
+            const text = status.charAt(0).toUpperCase() + status.slice(1);
+            el.innerHTML = `<span class="status-indicator ${statusClass}"></span>${text}`;
+        }
+
+        function updateParticipantsDisplay() {
+            const container = document.getElementById('participantsContainer');
+            
+            if (roomParticipants.length === 0) {
+                container.style.display = 'none';
+                return;
+            }
+            
+            container.style.display = 'flex';
+            container.innerHTML = '';
+            
+            roomParticipants.forEach((username, index) => {
+                const icon = document.createElement('div');
+                icon.className = 'participant-icon';
+                
+                // Check if this is the current user
+                if (username === currentUsername) {
+                    icon.classList.add('self');
+                }
+                
+                // Generate label (U1, U2, U3, etc.)
+                icon.textContent = `U${index + 1}`;
+                icon.setAttribute('title', username);
+                
+                container.appendChild(icon);
+            });
+        }
+
+        // ===========================================
+        // SSE: Real-time Notifications
+        // ===========================================
+        function connectSSE() {
+            eventLog('[SSE] Connecting to notification stream...', 'info');
+            updateSSEStatus('connecting');
+            
+            sseSource = new EventSource(`${API_BASE}/events/notifications`);
+            
+            sseSource.addEventListener('connected', (e) => {
+                updateSSEStatus('connected');
+                eventLog('[SSE] Connected to notification stream', 'success');
+                document.getElementById('sseConnectBtn').disabled = true;
+                document.getElementById('sseDisconnectBtn').disabled = false;
+            });
+            
+            sseSource.addEventListener('notification', (e) => {
+                const notification = JSON.parse(e.data);
+                addNotification(notification);
+                eventLog(`[SSE←Kafka] Received: ${notification.type}`, 'event');
+            });
+            
+            sseSource.addEventListener('heartbeat', (e) => {
+                // Heartbeat received, connection is alive
+            });
+            
+            sseSource.onerror = () => {
+                updateSSEStatus('disconnected');
+                eventLog('[SSE] Connection error or closed', 'error');
+                document.getElementById('sseConnectBtn').disabled = false;
+                document.getElementById('sseDisconnectBtn').disabled = true;
+            };
+        }
+
+        function disconnectSSE() {
+            if (sseSource) {
+                sseSource.close();
+                sseSource = null;
+                updateSSEStatus('disconnected');
+                eventLog('[SSE] Disconnected', 'info');
+                document.getElementById('sseConnectBtn').disabled = false;
+                document.getElementById('sseDisconnectBtn').disabled = true;
+            }
+        }
+
+        function addNotification(notification) {
+            const container = document.getElementById('notifications');
+            const div = document.createElement('div');
+            
+            let typeClass = '';
+            if (notification.type.includes('created')) typeClass = 'order-created';
+            else if (notification.type.includes('updated')) typeClass = 'order-updated';
+            else if (notification.type.includes('cancelled')) typeClass = 'order-cancelled';
+            
+            div.className = `notification-item ${typeClass}`;
+            div.innerHTML = `
+                <h4>${notification.title}</h4>
+                <p>${notification.message}</p>
+                <small style="color: #999;">${new Date(notification.timestamp).toLocaleString()}</small>
+            `;
+            
+            container.insertBefore(div, container.firstChild);
+        }
+
+        function clearNotifications() {
+            document.getElementById('notifications').innerHTML = '';
+        }
+
+        function updateSSEStatus(status) {
+            const el = document.getElementById('sseStatus');
+            const statusClass = status === 'connected' ? 'status-connected' : 
+                               status === 'connecting' ? 'status-connecting' : 'status-disconnected';
+            const text = status.charAt(0).toUpperCase() + status.slice(1);
+            el.innerHTML = `<span class="status-indicator ${statusClass}"></span>${text}`;
+        }
+
+        function clearEventLog() {
+            document.getElementById('eventLog').innerHTML = '';
+        }
+
+        // ===========================================
+        // Chat History from Persistence Service
+        // ===========================================
+        async function loadChatHistory() {
+            const room = document.getElementById('historyRoom').value;
+            const limit = parseInt(document.getElementById('historyLimit').value) || 50;
+            const beforeInput = document.getElementById('historyBefore').value;
+            
+            if (!room) {
+                alert('Please enter a room name');
+                return;
+            }
+            
+            eventLog(`[REST→Cassandra] Loading history for room "${room}"...`, 'info');
+            log('historyLog', `Loading ${limit} messages from room "${room}"...`, 'info');
+            
+            try {
+                let url = `${API_BASE}/api/persistence/rooms/${encodeURIComponent(room)}/history?limit=${limit}`;
+                
+                // Convert datetime-local input to ISO format if provided
+                if (beforeInput) {
+                    const beforeDate = new Date(beforeInput).toISOString();
+                    url += `&before=${encodeURIComponent(beforeDate)}`;
+                    log('historyLog', `Filtering: messages before ${beforeDate}`, 'info');
+                }
+                
+                const response = await fetch(url);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const messages = await response.json();
+                
+                log('historyLog', `✓ Loaded ${messages.length} messages:`, 'success');
+                log('historyLog', '─────────────────────────────────────', 'info');
+                
+                messages.forEach(msg => {
+                    const timestamp = new Date(msg.timestamp).toLocaleString();
+                    const type = msg.type || 'message';
+                    
+                    if (type === 'file') {
+                        log('historyLog', `[${timestamp}] ${msg.username}: 📎 ${msg.file_name}`, 'info');
+                    } else if (type === 'system' || type === 'join' || type === 'leave') {
+                        log('historyLog', `[${timestamp}] SYSTEM: ${msg.content}`, 'event');
+                    } else {
+                        log('historyLog', `[${timestamp}] ${msg.username}: ${msg.content}`, 'info');
+                    }
+                });
+                
+                if (messages.length === 0) {
+                    log('historyLog', 'No messages found in this room.', 'info');
+                }
+                
+                eventLog(`[REST→Cassandra] Loaded ${messages.length} messages from "${room}"`, 'success');
+                
+            } catch (err) {
+                log('historyLog', `✗ Error: ${err.message}`, 'error');
+                eventLog(`[REST→Cassandra] Error: ${err.message}`, 'error');
+            }
+        }
+
+        async function loadMessageCount() {
+            const room = document.getElementById('historyRoom').value;
+            
+            if (!room) {
+                alert('Please enter a room name');
+                return;
+            }
+            
+            eventLog(`[REST→Cassandra] Getting message count for "${room}"...`, 'info');
+            
+            try {
+                const response = await fetch(
+                    `${API_BASE}/api/persistence/rooms/${encodeURIComponent(room)}/count`
+                );
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                // Show stats panel
+                document.getElementById('historyStats').style.display = 'block';
+                document.getElementById('messageCount').textContent = data.message_count;
+                
+                log('historyLog', `✓ Total messages in "${room}": ${data.message_count}`, 'success');
+                eventLog(`[REST→Cassandra] Room "${room}" has ${data.message_count} messages`, 'success');
+                
+            } catch (err) {
+                log('historyLog', `✗ Error: ${err.message}`, 'error');
+                eventLog(`[REST→Cassandra] Error: ${err.message}`, 'error');
+            }
+        }
+
+        function clearHistory() {
+            document.getElementById('historyLog').innerHTML = '';
+            document.getElementById('historyStats').style.display = 'none';
+        }
+
+        // ===========================================
+        // File Upload Functions
+        // ===========================================
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+        }
+
+        // Set up drag and drop
+        const fileUploadArea = document.getElementById('fileUploadArea');
+        fileUploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            fileUploadArea.classList.add('dragover');
+        });
+        
+        fileUploadArea.addEventListener('dragleave', () => {
+            fileUploadArea.classList.remove('dragover');
+        });
+        
+        fileUploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            fileUploadArea.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFileUpload(files[0]);
+            }
+        });
+
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (file) {
+                handleFileUpload(file);
+            }
+        }
+
+        async function handleFileUpload(file) {
+            const room = document.getElementById('chatRoom').value;
+            const username = document.getElementById('chatUsername').value;
+            
+            if (!chatSocket || chatSocket.readyState !== WebSocket.OPEN) {
+                alert('Please connect to chat first');
+                return;
+            }
+            
+            eventLog(`[File Upload] Uploading ${file.name} (${formatFileSize(file.size)})...`, 'info');
+            
+            // Show progress UI
+            document.getElementById('uploadProgress').style.display = 'block';
+            document.getElementById('uploadIcon').style.display = 'none';
+            document.getElementById('uploadStatus').textContent = 'Preparing upload...';
+            document.getElementById('progressFill').style.width = '0%';
+            
+            try {
+                // Use simple upload for all files (MinIO SDK handles chunking internally)
+                await simpleFileUpload(file, room, username);
+                
+                // Reset UI
+                document.getElementById('uploadProgress').style.display = 'none';
+                document.getElementById('uploadIcon').style.display = 'block';
+                document.getElementById('fileInput').value = '';
+                
+                eventLog(`[File Upload] ✓ Upload complete: ${file.name}`, 'success');
+                
+            } catch (err) {
+                eventLog(`[File Upload] ✗ Upload failed: ${err.message}`, 'error');
+                alert(`Upload failed: ${err.message}`);
+                
+                // Reset UI
+                document.getElementById('uploadProgress').style.display = 'none';
+                document.getElementById('uploadIcon').style.display = 'block';
+                document.getElementById('fileInput').value = '';
+            }
+        }
+
+        async function simpleFileUpload(file, room, username) {
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            // Update progress
+            document.getElementById('uploadStatus').textContent = `Uploading ${file.name}...`;
+            document.getElementById('progressFill').style.width = '50%';
+            
+            const response = await fetch(
+                `${API_BASE}/api/chat/files/simple-upload?room=${encodeURIComponent(room)}&username=${encodeURIComponent(username)}`,
+                {
+                    method: 'POST',
+                    body: formData
+                }
+            );
+            
+            if (!response.ok) {
+                const error = await response.text();
+                throw new Error(`Upload failed: ${response.status} - ${error}`);
+            }
+            
+            const result = await response.json();
+            document.getElementById('uploadStatus').textContent = `Uploaded: ${file.name}`;
+            document.getElementById('progressFill').style.width = '100%';
+        }
+
+        // Initialize
+        eventLog('Microservices PoC loaded. Ready to demonstrate:', 'success');
+        eventLog('  • REST API (Users, Orders)', 'info');
+        eventLog('  • gRPC (User Service backend)', 'info');
+        eventLog('  • WebSocket (Real-time chat)', 'info');
+        eventLog('  • SSE (Notification stream)', 'info');
+        eventLog('  • Kafka (Event-driven messaging)', 'info');
+        eventLog('  • Cassandra (Message persistence & history)', 'info');
+        eventLog('  • MinIO S3 (File storage)', 'info');
+    </script>
+</body>
+</html>

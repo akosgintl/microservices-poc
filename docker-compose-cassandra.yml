@@ -1,0 +1,150 @@
+version: '3.8'
+
+services:
+
+  # Cassandra Node 1 - Seed node
+  cassandra-1:
+    image: cassandra:5.0
+    container_name: cassandra-1
+    ports:
+      - "9042:9042"  # CQL native transport port
+    environment:
+      CASSANDRA_CLUSTER_NAME: chat-cluster
+      CASSANDRA_DC: dc1
+      CASSANDRA_RACK: rack1
+      CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
+      CASSANDRA_SEEDS: cassandra-1,cassandra-2
+      MAX_HEAP_SIZE: 512M
+      HEAP_NEWSIZE: 128M
+    volumes:
+      - cassandra_data_1:/var/lib/cassandra
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe cluster' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    networks:
+      - microservices-net
+
+  # Cassandra Node 2 - Seed node
+  cassandra-2:
+    image: cassandra:5.0
+    container_name: cassandra-2
+    ports:
+      - "9043:9042"
+    environment:
+      CASSANDRA_CLUSTER_NAME: chat-cluster
+      CASSANDRA_DC: dc1
+      CASSANDRA_RACK: rack1
+      CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
+      CASSANDRA_SEEDS: cassandra-1,cassandra-2
+      MAX_HEAP_SIZE: 512M
+      HEAP_NEWSIZE: 128M
+    volumes:
+      - cassandra_data_2:/var/lib/cassandra
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe cluster' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    depends_on:
+      - cassandra-1
+    networks:
+      - microservices-net
+
+  # Cassandra Node 3
+  cassandra-3:
+    image: cassandra:5.0
+    container_name: cassandra-3
+    ports:
+      - "9044:9042"
+    environment:
+      CASSANDRA_CLUSTER_NAME: chat-cluster
+      CASSANDRA_DC: dc1
+      CASSANDRA_RACK: rack2
+      CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
+      CASSANDRA_SEEDS: cassandra-1,cassandra-2
+      MAX_HEAP_SIZE: 512M
+      HEAP_NEWSIZE: 128M
+    volumes:
+      - cassandra_data_3:/var/lib/cassandra
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe cluster' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    depends_on:
+      - cassandra-1
+      - cassandra-2
+    networks:
+      - microservices-net
+
+  # Cassandra Node 4
+  cassandra-4:
+    image: cassandra:5.0
+    container_name: cassandra-4
+    ports:
+      - "9045:9042"
+    environment:
+      CASSANDRA_CLUSTER_NAME: chat-cluster
+      CASSANDRA_DC: dc1
+      CASSANDRA_RACK: rack2
+      CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
+      CASSANDRA_SEEDS: cassandra-1,cassandra-2
+      MAX_HEAP_SIZE: 512M
+      HEAP_NEWSIZE: 128M
+    volumes:
+      - cassandra_data_4:/var/lib/cassandra
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe cluster' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    depends_on:
+      - cassandra-1
+      - cassandra-2
+    networks:
+      - microservices-net
+
+  # Cassandra Node 5
+  cassandra-5:
+    image: cassandra:5.0
+    container_name: cassandra-5
+    ports:
+      - "9046:9042"
+    environment:
+      CASSANDRA_CLUSTER_NAME: chat-cluster
+      CASSANDRA_DC: dc1
+      CASSANDRA_RACK: rack3
+      CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
+      CASSANDRA_SEEDS: cassandra-1,cassandra-2
+      MAX_HEAP_SIZE: 512M
+      HEAP_NEWSIZE: 128M
+    volumes:
+      - cassandra_data_5:/var/lib/cassandra
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe cluster' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    depends_on:
+      - cassandra-1
+      - cassandra-2
+    networks:
+      - microservices-net
+
+volumes:
+  cassandra_data_1:
+  cassandra_data_2:
+  cassandra_data_3:
+  cassandra_data_4:
+  cassandra_data_5:
+
+networks:
+  microservices-net:
+    external: true
