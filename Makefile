@@ -1,12 +1,21 @@
-.PHONY: up down logs logs-tail logs-tail-% stats stats-live build clean clean-volumes clean-all demo test-rest test-ws test-sse test-grpc install-clients health health-% kafka-topics kafka-consume-% redis-cli scale-% scale-chat test-chat-scaling chat-redis-monitor chat-rooms chat-users-% minio-cli cassandra-cli cassandra-describe kafka-ui redis-ui help up-logs restart restart-% ps status
+.PHONY: up down logs logs-tail logs-tail-% stats stats-live build clean clean-volumes clean-all demo test-rest test-ws test-sse test-grpc install-clients health health-% kafka-topics kafka-consume-% redis-cli scale-% scale-chat scale-gateway test-chat-scaling chat-redis-monitor chat-rooms chat-users-% minio-cli cassandra-cli cassandra-describe kafka-ui redis-ui nginx-status nginx-logs help up-logs up-lb restart restart-% ps status
 
 # Default target - show help
 .DEFAULT_GOAL := help
 
-# Start all services
+# Start all services with load balancer (3 API Gateway instances)
 up:
 	docker compose up --build -d
-	@echo "Services starting... Wait a few seconds then access http://localhost:8000"
+	@echo "Services starting with NGINX load balancer..."
+	@echo "Main entry point: http://localhost (port 80)"
+	@echo "Wait a few seconds for services to be healthy..."
+
+# Start with load balancing configuration and resource limits
+up-lb:
+	docker compose -f docker-compose.yml -f docker-compose.lb.yml up --build -d
+	@echo "Services starting with enhanced load balancing..."
+	@echo "API Gateway: 3 instances behind NGINX"
+	@echo "Access: http://localhost"
 
 # Start with logs visible
 up-logs:
@@ -86,15 +95,16 @@ test-grpc:
 install-clients:
 	pip install -r clients/requirements.txt
 
-# Check service health
+# Check service health (via NGINX load balancer)
 health:
-	@curl -s http://localhost:8000/health | python -m json.tool
+	@echo "Checking health via NGINX load balancer (port 80)..."
+	@curl -s http://localhost/health | python -m json.tool
 
 # Check individual service health
 health-%:
 	@echo "Checking health for $*..."
 	@case "$*" in \
-		api-gateway) curl -s http://localhost:8000/health | python -m json.tool ;; \
+		nginx) curl -s http://localhost/health | python -m json.tool ;; \
 		order-service) curl -s http://localhost:8002/health | python -m json.tool ;; \
 		notification-service) curl -s http://localhost:8003/health | python -m json.tool ;; \
 		message-persistence-service) curl -s http://localhost:8004/health | python -m json.tool ;; \
@@ -143,6 +153,38 @@ scale-chat:
 	docker compose up -d --scale chat-service=3
 	@echo "Chat service scaled! Instances running on ports 8010-8012"
 
+# Scale API Gateway instances (behind NGINX)
+scale-gateway:
+	@echo "Scaling api-gateway to 5 instances..."
+	docker compose up -d --scale api-gateway=5
+	@echo "API Gateway scaled to 5 instances behind NGINX load balancer"
+	@echo "NGINX will automatically distribute traffic across all instances"
+
+# NGINX monitoring commands
+nginx-fe-status:
+	@echo "NGINX Frontend Status:"
+	@curl -s http://localhost/nginx-status || echo "Status endpoint not accessible from outside container"
+	@echo ""
+	@echo "API Gateway instances:"
+	@docker compose ps api-gateway
+
+nginx-fe-logs:
+	docker compose logs -f nginx-fe
+
+nginx-be-status:
+	@echo "NGINX Backend Status:"
+	@docker compose exec nginx-be wget -qO- http://localhost:8090/health || echo "Failed to get status"
+	@echo ""
+	@echo "Backend service status:"
+	@docker compose ps user-service chat-service order-service notification-service message-persistence-service
+
+nginx-be-logs:
+	docker compose logs -f nginx-be
+
+# Backwards compatibility
+nginx-status: nginx-fe-status
+nginx-logs: nginx-fe-logs
+
 # test-chat-scaling:
 # 	@echo "Testing Redis-powered horizontal scaling..."
 # 	python chat-service/test_scaling.py
@@ -174,21 +216,39 @@ cassandra-describe:
 	@echo "Cassandra keyspace and tables:"
 	docker compose exec cassandra cqlsh -e "DESCRIBE KEYSPACES; DESCRIBE TABLES;"
 
-# UI Access commands
+# UI Access commands (via nginx-fe HTTPS proxy)
+ui-redis:
+	@echo "Opening Redis UI via nginx-fe..."
+	@echo "URL: https://localhost/redis-ui/"
+	@echo "Note: Browser will warn about self-signed certificate - this is expected"
+
+ui-kafka:
+	@echo "Opening Kafka UI via nginx-fe..."
+	@echo "URL: https://localhost/kafka-ui/"
+	@echo "Note: Browser will warn about self-signed certificate - this is expected"
+
+ui-minio:
+	@echo "Opening MinIO Console via nginx-fe..."
+	@echo "URL: https://localhost/minio/"
+	@echo "Login: minioadmin / minioadmin"
+	@echo "Note: Browser will warn about self-signed certificate - this is expected"
+
+# Legacy direct access (use ui-* commands instead)
 kafka-ui:
-	@echo "Opening Kafka UI at http://localhost:8080"
-	@echo "If not opening automatically, navigate to: http://localhost:8080"
+	@echo "Opening Kafka UI at http://localhost:8080 (direct access)"
+	@echo "Recommended: Use 'make ui-kafka' for HTTPS access via nginx-fe"
 
 redis-ui:
-	@echo "Opening Redis UI at http://localhost:5540"
-	@echo "If not opening automatically, navigate to: http://localhost:5540"
+	@echo "Opening Redis UI at http://localhost:5540 (direct access)"
+	@echo "Recommended: Use 'make ui-redis' for HTTPS access via nginx-fe"
 
 # Help
 help:
 	@echo "Available commands:"
 	@echo ""
 	@echo "Service Management:"
-	@echo "  make up              - Start all services in background"
+	@echo "  make up              - Start all services with NGINX load balancer"
+	@echo "  make up-lb           - Start with load balancing config (resource limits)"
 	@echo "  make up-logs         - Start all services with logs"
 	@echo "  make down            - Stop all services"
 	@echo "  make restart         - Restart all services"
@@ -215,9 +275,16 @@ help:
 	@echo "  make test-sse        - Test SSE"
 	@echo "  make test-grpc       - Test gRPC"
 	@echo ""
-	@echo "Horizontal Scaling (Chat Service):"
+	@echo "Load Balancing & Scaling:"
+	@echo "  make scale-gateway   - Scale API Gateway to 5 instances"
 	@echo "  make scale-chat      - Scale chat-service to 3 instances"
 	@echo "  make scale-<svc>=N   - Scale any service to N instances"
+	@echo "  make nginx-fe-status - Show NGINX frontend and gateway status"
+	@echo "  make nginx-fe-logs   - View NGINX frontend logs"
+	@echo "  make nginx-be-status - Show NGINX backend and service status"
+	@echo "  make nginx-be-logs   - View NGINX backend logs"
+	@echo "  make nginx-status    - Show NGINX frontend status (alias)"
+	@echo "  make nginx-logs      - View NGINX frontend logs (alias)"
 	@echo "  make chat-rooms      - Show all active rooms in Redis"
 	@echo "  make chat-users-<room> - Show users in a specific room"
 	@echo "  make chat-redis-monitor - Monitor Redis commands in real-time"
@@ -225,12 +292,17 @@ help:
 	@echo "Infrastructure Tools:"
 	@echo "  make kafka-topics    - List Kafka topics"
 	@echo "  make kafka-consume-<topic> - Consume from Kafka topic"
-	@echo "  make kafka-ui        - Show Kafka UI info (http://localhost:8080)"
 	@echo "  make redis-cli       - Open Redis CLI"
-	@echo "  make redis-ui        - Show Redis UI info (http://localhost:5540)"
-	@echo "  make minio-cli       - Show MinIO console info"
 	@echo "  make cassandra-cli   - Open Cassandra CQL shell"
 	@echo "  make cassandra-describe - Describe Cassandra schema"
+	@echo ""
+	@echo "Management UIs (via HTTPS):"
+	@echo "  make ui-redis        - Open Redis UI (https://localhost/redis-ui/)"
+	@echo "  make ui-kafka        - Open Kafka UI (https://localhost/kafka-ui/)"
+	@echo "  make ui-minio        - Open MinIO Console (https://localhost/minio/)"
+	@echo "  make kafka-ui        - Show direct Kafka UI URL (legacy)"
+	@echo "  make redis-ui        - Show direct Redis UI URL (legacy)"
+	@echo "  make minio-cli       - Show MinIO console info"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make logs-chat-service       - View chat service logs"

@@ -1,6 +1,6 @@
 # Microservices Communication Protocols PoC
 
-A comprehensive, production-ready proof-of-concept demonstrating modern microservices communication patterns: **REST**, **gRPC**, **WebSocket**, **SSE (Server-Sent Events)**, and **Kafka** event-driven architecture with horizontal scaling capabilities and **S3-compatible file storage**.
+A comprehensive, production-ready proof-of-concept demonstrating modern microservices communication patterns: **REST**, **gRPC**, **WebSocket**, **SSE (Server-Sent Events)**, and **Kafka** event-driven architecture with **NGINX load balancing**, horizontal scaling capabilities and **S3-compatible file storage**.
 
 ## 🎯 What You'll Learn
 
@@ -8,13 +8,15 @@ This PoC demonstrates enterprise-level patterns for:
 - **Synchronous Communication**: REST APIs and gRPC for request-response patterns
 - **Asynchronous Communication**: Kafka for event-driven architectures
 - **Real-time Communication**: WebSocket for bidirectional streaming, SSE for server-push
+- **Load Balancing**: NGINX Layer 7 load balancer with session affinity
 - **File Storage**: MinIO S3-compatible object storage with presigned URLs
 - **Message Persistence**: Three-tier architecture (Redis/Kafka/Cassandra)
 - **Horizontal Scaling**: Redis-powered distributed state management
 - **Microservices Patterns**: Service mesh, API gateway, event sourcing, CQRS principles
 
 ✨ **Highlights:**
-- 🚀 **Horizontally Scalable** - Chat service with Redis coordination
+- 🔄 **Production-grade Load Balancing** - NGINX with health checks, failover, and rate limiting
+- 🚀 **Horizontally Scalable** - Chat service with Redis coordination, API Gateway with NGINX
 - 📦 **Containerized** - Full Docker Compose orchestration
 - 🔄 **Event-Driven** - Kafka with KRaft mode (no ZooKeeper)
 - 📁 **File Sharing** - MinIO object storage for file uploads/downloads
@@ -33,18 +35,32 @@ This PoC demonstrates enterprise-level patterns for:
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └────────┬─────────┘ │
 └─────────┼─────────────────┼─────────────────┼───────────────────┼───────────┘
           │                 │                 │                   │
-          ▼                 ▼                 ▼                   ▼
+          └─────────────────┴─────────────────┴───────────────────┘
+                                    │
+                                    ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                           API GATEWAY (FastAPI)                     :8000   │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐ │
-│  │  REST API   │  │  WebSocket  │  │     SSE     │  │   Static Files     │ │
-│  │  /api/*     │  │  /ws/chat/* │  │  /events/*  │  │   (Web Client)     │ │
-│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └─────────────────────┘ │
-└─────────┼────────────────┼────────────────┼─────────────────────────────────┘
-          │                │                │
-          │    ┌───────────┴────────────────┴──────────────┐
-          │    │                                           │
-          ▼    ▼                                           ▼
+│                      NGINX LOAD BALANCER (Port 80)                  NEW!   │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  • Layer 7 (HTTP/WebSocket/SSE)   • Health checks & failover       │   │
+│  │  • Least-connections algorithm     • Rate limiting (100 req/s)     │   │
+│  │  • Session affinity for WebSocket  • SSL/TLS ready                 │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+          ┌─────────────────────────┼─────────────────────────┐
+          │                         │                         │
+          ▼                         ▼                         ▼
+┌──────────────────┐      ┌──────────────────┐      ┌──────────────────┐
+│  API GATEWAY     │      │  API GATEWAY     │      │  API GATEWAY     │
+│   Instance 1     │      │   Instance 2     │      │   Instance 3     │
+│     :8000        │      │     :8000        │      │     :8000        │
+└──────────────────┘      └──────────────────┘      └──────────────────┘
+          │                         │                         │
+          └─────────────────────────┴─────────────────────────┘
+                                    │
+          ┌─────────────────────────┼─────────────────────────┐
+          │                         │                         │
+          ▼                         ▼                         ▼
 ┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐
 │   USER SERVICE       │  │   CHAT SERVICE       │  │   ORDER SERVICE      │
 │      (gRPC)          │  │    (WebSocket)       │  │   (REST + Kafka)     │
@@ -221,7 +237,7 @@ Expected output: All services should show "healthy" status.
 
 ### 3. Access the Web Client
 
-Open your browser: **http://localhost:8000**
+Open your browser: **http://localhost** (port 80, via NGINX load balancer)
 
 The web client provides an interactive UI to test all protocols:
 - ✅ **REST API Testing** - Create users, manage orders
@@ -265,9 +281,62 @@ See [`clients/README.md`](clients/README.md) for detailed client documentation.
 
 ## 🏗️ Service Architecture
 
+### NGINX Load Balancer (Port 80) **NEW!**
+
+**Role**: Layer 7 load balancer and traffic distributor  
+**Tech**: NGINX 1.25  
+**Patterns**: Load balancing, health checking, session affinity, rate limiting
+
+The NGINX load balancer sits in front of API Gateway instances and provides:
+
+**Features:**
+- ✅ **Load Distribution**: Routes traffic using least-connections algorithm
+- ✅ **High Availability**: Automatic failover (max_fails=3, fail_timeout=30s)
+- ✅ **Protocol Support**: REST, WebSocket (with sticky sessions), SSE
+- ✅ **Rate Limiting**: 100 req/sec baseline, burst 200 (configurable)
+- ✅ **Health Checks**: Monitors `/health` endpoint of all instances
+- ✅ **Session Affinity**: IP-hash for WebSocket connections
+- ✅ **Performance**: Keepalive connections, gzip compression
+- ✅ **Security**: Rate limiting, security headers, request size limits
+
+**Load Balancing Configuration:**
+
+```nginx
+# REST/SSE - Least connections
+upstream api_gateway_cluster {
+    least_conn;
+    server api-gateway:8000 max_fails=3 fail_timeout=30s;
+    keepalive 32;
+}
+
+# WebSocket - Session affinity
+upstream api_gateway_websocket {
+    ip_hash;  # Same client → same backend
+    server api-gateway:8000 max_fails=3 fail_timeout=30s;
+}
+```
+
+**Why Layer 7 (not Layer 4)?**
+- ✅ Understands HTTP, WebSocket, SSE protocols
+- ✅ Can route based on URL paths (/api/, /ws/, /events/)
+- ✅ SSL/TLS termination
+- ✅ Application-level health checks
+- ✅ Session affinity for WebSocket
+
+**Scaling:**
+```bash
+# Scale API Gateway instances
+docker compose up -d --scale api-gateway=5
+
+# NGINX automatically routes to all instances!
+# No configuration change needed
+```
+
+See `nginx/README.md` for detailed configuration and `nginx/QUICKSTART.md` for usage guide.
+
 ### API Gateway (Port 8000)
 
-**Role**: Main entry point and protocol aggregator  
+**Role**: Main entry point and protocol aggregator (behind NGINX)  
 **Tech**: FastAPI, Uvicorn  
 **Patterns**: API Gateway, Backend-for-Frontend (BFF)
 
@@ -498,28 +567,96 @@ CREATE TABLE chat.messages (
 
 ## 🧪 Testing Scenarios
 
+### Scenario 0: NGINX Load Balancer Testing **NEW!**
+
+**What it demonstrates**: Layer 7 load balancing, failover, session affinity
+
+```bash
+# 1. Start with load balancer (3 API Gateway instances)
+docker compose up --build -d
+
+# 2. Run comprehensive test suite
+bash nginx/test-lb.sh
+
+# 3. Test load distribution manually
+echo "Sending 20 requests to see load distribution..."
+for i in {1..20}; do
+  curl -s http://localhost/health | jq -r '.service' 
+done
+
+# 4. Watch NGINX logs to see upstream routing
+docker compose logs -f nginx &
+
+# 5. Send requests and watch distribution
+for i in {1..10}; do
+  curl -s http://localhost/health
+  sleep 1
+done
+
+# 6. Test failover
+# List gateway instances
+docker compose ps api-gateway
+
+# Stop one instance
+docker compose stop <instance-name-from-above>
+
+# Requests still work! NGINX routes around failed instance
+curl http://localhost/health
+
+# Check NGINX logs - no routing to stopped instance
+docker compose logs nginx | grep "upstream:" | tail -20
+
+# 7. Restart instance
+docker compose start <instance-name>
+
+# 8. Scale up to 5 instances
+make scale-gateway
+
+# NGINX automatically picks up new instances!
+docker compose ps api-gateway
+
+# 9. Test WebSocket with session affinity
+# Open two terminals and connect same user
+# Terminal 1:
+python clients/websocket_client.py --room test --user alice
+
+# Terminal 2 (same IP = same backend instance):
+python clients/websocket_client.py --room test --user bob
+
+# Messages delivered correctly via sticky sessions!
+```
+
+**Behind the scenes:**
+- NGINX uses `least_conn` algorithm for REST/SSE
+- NGINX uses `ip_hash` for WebSocket (session affinity)
+- Failed instances automatically removed from pool
+- Health checks run every connection attempt
+- Rate limiting protects against abuse
+
 ### Scenario 1: REST API → gRPC Internal Communication
 
 **What it demonstrates**: API Gateway translating REST to gRPC
 
 ```bash
-# 1. Create a user via REST API
-curl -X POST http://localhost:8000/api/users \
+# 1. Create a user via REST API (through NGINX load balancer)
+curl -X POST http://localhost/api/users \
   -H "Content-Type: application/json" \
   -d '{"name": "Alice Johnson", "email": "alice@example.com", "role": "customer"}' | jq
 
 # Behind the scenes:
-# - API Gateway receives REST request
-# - Converts to gRPC call
+# - NGINX load balancer receives REST request
+# - Routes to one of 3 API Gateway instances (least_conn)
+# - API Gateway converts to gRPC call
 # - User Service handles via Protocol Buffers
 # - Response converted back to JSON
+# - NGINX returns response to client
 
 # 2. List all users
-curl http://localhost:8000/api/users | jq
+curl http://localhost/api/users | jq
 
 # 3. Get specific user
-USER_ID=$(curl -s http://localhost:8000/api/users | jq -r '.[0].id')
-curl http://localhost:8000/api/users/$USER_ID | jq
+USER_ID=$(curl -s http://localhost/api/users | jq -r '.[0].id')
+curl http://localhost/api/users/$USER_ID | jq
 ```
 
 ### Scenario 2: WebSocket Chat with File Sharing and Persistence
@@ -547,7 +684,7 @@ python clients/websocket_client.py --room general --user bob --port 8012
 #    docker exec -it cassandra cqlsh -e "SELECT COUNT(*) FROM chat.messages WHERE room='general';"
 #    → Should show: 15+ (full history)
 # 4. Query history via API:
-#    curl "http://localhost:8000/api/chat/rooms/general/history?limit=100"
+#    curl "http://localhost/api/chat/rooms/general/history?limit=100"
 ```
 
 ### Scenario 3: End-to-End Event-Driven Flow (Order → Kafka → SSE)
@@ -559,7 +696,7 @@ python clients/websocket_client.py --room general --user bob --port 8012
 python clients/sse_client.py
 
 # Terminal 2 - Create an order
-curl -X POST http://localhost:8000/api/orders \
+curl -X POST http://localhost/api/orders \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "user-1",
@@ -668,21 +805,24 @@ docker exec -it redis redis-cli MONITOR
 
 ### Port Mapping
 
-| Service | Internal Port | External Port | Protocol |
-|---------|--------------|---------------|----------|
-| API Gateway | 8000 | 8000 | HTTP/WS/SSE |
-| Chat Service | 8001 | 8011-8020 (scaled) | WebSocket |
-| Order Service | 8002 | 8002 | HTTP |
-| Notification Service | 8003 | 8003 | HTTP/SSE |
-| Message Persistence | 8004 | 8004 | HTTP |
-| User Service | 50051 | 50051 | gRPC |
-| Kafka | 9092 | 9092 | Kafka protocol |
-| Kafka UI | 8080 | 8080 | HTTP |
-| Redis | 6379 | 6379 | Redis protocol |
-| Redis UI | 5540 | 5540 | HTTP |
-| Cassandra | 9042 | 9042 | CQL |
-| MinIO API | 9000 | 9000 | S3 API |
-| MinIO Console | 9001 | 9001 | HTTP |
+| Service | Internal Port | External Port | Protocol | Access |
+|---------|--------------|---------------|----------|---------|
+| **NGINX Load Balancer** | 80 | **80** | HTTP/WS/SSE | **Main entry point** |
+| API Gateway | 8000 | (internal only) | HTTP/WS/SSE | Via NGINX |
+| Chat Service | 8001 | 8011-8020 (scaled) | WebSocket | Internal |
+| Order Service | 8002 | 8002 | HTTP | Internal |
+| Notification Service | 8003 | 8003 | HTTP/SSE | Internal |
+| Message Persistence | 8004 | 8004 | HTTP | Internal |
+| User Service | 50051 | 50051 | gRPC | Internal |
+| Kafka | 9092 | 9092 | Kafka protocol | Internal |
+| Kafka UI | 8080 | 8080 | HTTP | http://localhost:8080 |
+| Redis | 6379 | 6379 | Redis protocol | Internal |
+| Redis UI | 5540 | 5540 | HTTP | http://localhost:5540 |
+| Cassandra | 9042 | 9042 | CQL | Internal |
+| MinIO API | 9000 | 9000 | S3 API | Internal |
+| MinIO Console | 9001 | 9001 | HTTP | http://localhost:9001 |
+
+**Important**: All client traffic now goes through NGINX on port 80, not directly to API Gateway on port 8000.
 
 ### Horizontal Scaling
 
@@ -691,21 +831,28 @@ docker exec -it redis redis-cli MONITOR
 docker compose up -d --scale <service-name>=<count>
 
 # Examples:
-docker compose up -d --scale chat-service=3       # 3 chat instances
-docker compose up -d --scale order-service=3      # 3 order instances  
+docker compose up -d --scale api-gateway=5      # 5 gateway instances (behind NGINX)
+docker compose up -d --scale chat-service=3     # 3 chat instances
+docker compose up -d --scale order-service=3    # 3 order instances  
 docker compose up -d --scale notification-service=2  # 2 notification consumers
+
+# Using Makefile
+make scale-gateway   # Scales API Gateway to 5
+make scale-chat      # Scales chat to 3
 
 # Check scaling status
 docker compose ps
+make status
 ```
 
 **Which services can scale horizontally?**
+- ✅ **API Gateway** - NGINX load balances across all instances automatically
 - ✅ **Chat Service** - Full support with Redis coordination
 - ✅ **Order Service** - Stateless, fully scalable
 - ✅ **Notification Service** - Kafka consumer group handles load balancing
 - ✅ **Message Persistence Service** - Multiple instances via Kafka partitions
-- ⚠️ **API Gateway** - Can scale but requires load balancer (nginx, HAProxy)
 - ❌ **User Service** - Single instance in this PoC (can scale with service mesh)
+- ❌ **NGINX** - Single instance (can use external load balancer for NGINX HA)
 
 ## 📊 Observability & Monitoring
 

@@ -1,7 +1,4 @@
-version: '3.8'
-
 services:
-
   # Cassandra Node 1 - Seed node
   cassandra-1:
     image: cassandra:5.0

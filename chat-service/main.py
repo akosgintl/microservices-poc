@@ -24,20 +24,25 @@ import socket
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException, UploadFile, File, Body
 from fastapi.responses import JSONResponse
+from contextlib import asynccontextmanager
 import redis.asyncio as redis
 from minio import Minio
 from minio.error import S3Error
 from aiokafka import AIOKafkaProducer
 from cassandra.cluster import Cluster, Session
 from cassandra.auth import PlainTextAuthProvider
+from cassandra.policies import DCAwareRoundRobinPolicy
 
+# Configure consistent logging format
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Chat Service", version="2.0.0")
+# Global connection manager (initialized before app)
+manager = None
 
 # Instance identifier for tracking which instance handles which connections
 INSTANCE_ID = f"chat-{socket.gethostname()}-{uuid4().hex[:8]}"
@@ -204,18 +209,20 @@ class ConnectionManager:
         """Initialize Cassandra client for history queries"""
         try:
             logger.info(f"Connecting to Cassandra at {CASSANDRA_HOSTS}:{CASSANDRA_PORT}")
-            
+
+            # Use load balancing policy to avoid deprecation warning
             self.cassandra_cluster = Cluster(
                 contact_points=CASSANDRA_HOSTS,
                 port=CASSANDRA_PORT,
-                protocol_version=4
+                protocol_version=4,
+                load_balancing_policy=DCAwareRoundRobinPolicy(local_dc='dc1')
             )
-            
+
             self.cassandra_session = self.cassandra_cluster.connect()
             self.cassandra_session.set_keyspace(CASSANDRA_KEYSPACE)
-            
+
             logger.info(f"✓ Connected to Cassandra keyspace: {CASSANDRA_KEYSPACE}")
-            
+
         except Exception as e:
             logger.error(f"✗ Cassandra connection failed: {e}")
             logger.warning("⚠ History queries will be disabled")
@@ -264,7 +271,7 @@ class ConnectionManager:
             logger.info("🛑 Redis subscriber stopped")
             if pubsub:
                 await pubsub.unsubscribe()
-                await pubsub.close()
+                await pubsub.aclose()
             raise
         except Exception as e:
             logger.error(f"❌ Redis subscriber error: {e}")
@@ -514,13 +521,13 @@ class ConnectionManager:
     async def broadcast_to_room(self, room: str, message: ChatMessage, exclude_connection: Optional[str] = None, store_in_history: bool = True):
         """
         Broadcast a message to all users in a room (local + remote via Redis)
-        
-        Flow:
-        1. Publish to Kafka (for persistence to Cassandra)
-        2. Store message in Redis cache (if store_in_history=True) - keep only 10 latest
-        3. Publish to Redis pub/sub (for other instances to receive)
-        4. Broadcast to local WebSocket connections
-        
+
+        Flow (optimized for low-latency delivery):
+        1. Broadcast to local WebSocket connections (instant)
+        2. Publish to Redis pub/sub (for other instances to receive) - fast
+        3. Store message in Redis cache (if store_in_history=True) - fast
+        4. Publish to Kafka (for persistence to Cassandra) - non-blocking background task
+
         Message Type Handling:
         - "message": Regular chat messages (stored in cache, persisted via Kafka, broadcast globally)
         - "system": System notifications (stored in cache, persisted via Kafka, broadcast globally)
@@ -528,7 +535,7 @@ class ConnectionManager:
         - "join": User joined (persisted via Kafka, broadcast globally, sender excluded)
         - "leave": User left (persisted via Kafka, broadcast globally)
         - "typing": Typing indicator (NOT stored, NOT persisted, broadcast globally, sender excluded)
-        
+
         Parameters:
         - room: Room name to broadcast to
         - message: ChatMessage object to broadcast
@@ -536,87 +543,104 @@ class ConnectionManager:
         - store_in_history: Whether to persist message in Redis cache (default: True)
         """
         msg_dict = asdict(message)
-        
+
         # Add instance metadata for pub/sub
         msg_dict['_instance'] = INSTANCE_ID
-        
-        # Publish to Kafka for persistence (all message types except typing and internal messages)
-        if self.kafka_producer and message.type in ['message', 'system', 'file', 'join', 'leave']:
+
+        # PRIORITY 1: Broadcast to LOCAL connections FIRST (instant user feedback)
+        disconnected = []
+        for conn_id, (websocket, conn_room, username) in self.local_connections.items():
+            if conn_room != room or conn_id == exclude_connection:
+                continue
+
             try:
-                # Choose topic based on message type
-                topic = KAFKA_TOPIC_MESSAGES if message.type in ['message', 'file'] else KAFKA_TOPIC_EVENTS
-                
-                # Send to Kafka
-                await self.kafka_producer.send_and_wait(topic, msg_dict)
-                logger.debug(f"✓ Published to Kafka topic '{topic}': {message.type} from {message.username}")
-                
+                await websocket.send_json(msg_dict)
             except Exception as e:
-                logger.error(f"✗ Failed to publish to Kafka: {e}")
-        
+                logger.error(f"Failed to send to {username}: {e}")
+                disconnected.append(conn_id)
+
+        # Clean up disconnected (don't broadcast leave - let WebSocket close handler do it)
+        for conn_id in disconnected:
+            if conn_id in self.local_connections:
+                _, room, username = self.local_connections[conn_id]
+                await self._disconnect_internal(conn_id, room, username, broadcast_leave=False)
+
+        # PRIORITY 2: Publish to Redis pub/sub immediately (critical for cross-instance broadcasting)
+        # Don't make this a background task - it needs to be fast for multi-instance setups
+        if self.redis:
+            try:
+                # Use fire-and-forget: don't wait for confirmation (fastest delivery)
+                # Create task but don't await it - Redis pub/sub is very fast
+                asyncio.create_task(self._publish_to_redis(room, msg_dict))
+            except Exception as e:
+                logger.error(f"Redis publish failed: {e}")
+
+        # PRIORITY 3: Fire off Redis cache and Kafka operations as background tasks (non-blocking)
+        # These can happen in the background without affecting message delivery speed
+        asyncio.create_task(self._persist_message_async(room, msg_dict, message.type, store_in_history))
+
+    async def _persist_message_async(self, room: str, msg_dict: dict, msg_type: str, store_in_history: bool):
+        """
+        Background task to persist message to Redis cache and Kafka without blocking WebSocket broadcast
+        Runs asynchronously after the message has already been delivered to users
+        """
         # Store in Redis message cache (keep only 10 latest messages)
         # Only store regular messages, files, and system messages (not join/leave/typing)
-        if self.redis and store_in_history and message.type in ['message', 'file', 'system']:
+        if self.redis and store_in_history and msg_type in ['message', 'file', 'system']:
             try:
                 # Add to room history (keep last 10 messages)
                 await self.redis.lpush(f"chat:room:{room}:history", json.dumps(msg_dict))
                 await self.redis.ltrim(f"chat:room:{room}:history", 0, 9)  # Keep only 10 latest
             except Exception as e:
                 logger.error(f"Failed to store message in Redis: {e}")
-        
-        # Publish to Redis pub/sub (for cross-instance broadcasting)
-        if self.redis:
+
+        # Publish to Kafka for persistence (non-blocking)
+        if self.kafka_producer and msg_type in ['message', 'system', 'file', 'join', 'leave']:
             try:
-                await self.redis.publish(f"chat:room:{room}", json.dumps(msg_dict))
+                # Choose topic based on message type
+                topic = KAFKA_TOPIC_MESSAGES if msg_type in ['message', 'file'] else KAFKA_TOPIC_EVENTS
+
+                # Send to Kafka without waiting for acknowledgment
+                await self.kafka_producer.send(topic, msg_dict)
+                logger.debug(f"✓ Queued for Kafka topic '{topic}': {msg_type}")
+
             except Exception as e:
-                logger.error(f"Redis publish failed: {e}")
-        
-        # Broadcast to LOCAL connections in this room
-        disconnected = []
-        for conn_id, (websocket, conn_room, username) in self.local_connections.items():
-            if conn_room != room or conn_id == exclude_connection:
-                continue
-            
-            try:
-                await websocket.send_json(msg_dict)
-            except Exception as e:
-                logger.error(f"Failed to send to {username}: {e}")
-                disconnected.append(conn_id)
-        
-        # Clean up disconnected (don't broadcast leave - let WebSocket close handler do it)
-        for conn_id in disconnected:
-            if conn_id in self.local_connections:
-                _, room, username = self.local_connections[conn_id]
-                await self._disconnect_internal(conn_id, room, username, broadcast_leave=False)
+                logger.error(f"✗ Failed to publish to Kafka: {e}")
     
     async def _broadcast_users_list(self, room: str, users_msg: dict):
         """
         Broadcast updated users list to all users in a room (local + remote via Redis)
         This is a specialized broadcast for user list updates
+        Optimized for instant delivery: broadcasts locally first, then syncs to Redis in background
         """
-        # Publish to Redis pub/sub (for cross-instance broadcasting)
-        if self.redis:
-            try:
-                await self.redis.publish(f"chat:room:{room}", json.dumps(users_msg))
-            except Exception as e:
-                logger.error(f"Redis publish failed: {e}")
-        
-        # Broadcast to LOCAL connections in this room
+        # PRIORITY 1: Broadcast to LOCAL connections FIRST (instant)
         disconnected = []
         for conn_id, (websocket, conn_room, username) in self.local_connections.items():
             if conn_room != room:
                 continue
-            
+
             try:
                 await websocket.send_json(users_msg)
             except Exception as e:
                 logger.error(f"Failed to send users list to {username}: {e}")
                 disconnected.append(conn_id)
-        
+
         # Clean up disconnected
         for conn_id in disconnected:
             if conn_id in self.local_connections:
                 _, room, username = self.local_connections[conn_id]
                 await self._disconnect_internal(conn_id, room, username, broadcast_leave=False)
+
+        # PRIORITY 2: Publish to Redis pub/sub in background (non-blocking)
+        if self.redis:
+            asyncio.create_task(self._publish_to_redis(room, users_msg))
+
+    async def _publish_to_redis(self, room: str, msg: dict):
+        """Background task to publish message to Redis pub/sub"""
+        try:
+            await self.redis.publish(f"chat:room:{room}", json.dumps(msg))
+        except Exception as e:
+            logger.error(f"Redis publish failed: {e}")
     
     async def get_room_info(self, room: str) -> Optional[RoomInfo]:
         """
@@ -723,10 +747,10 @@ class ConnectionManager:
         
         # Close Redis connections
         if self.redis:
-            await self.redis.close()
+            await self.redis.aclose()
         if self.redis_subscriber:
-            await self.redis_subscriber.close()
-        
+            await self.redis_subscriber.aclose()
+
         logger.info("✓ Cleanup complete")
     
     def get_room_history_from_cassandra(self, room: str, limit: int = 100, before_timestamp: Optional[datetime] = None) -> List[dict]:
@@ -776,12 +800,14 @@ class ConnectionManager:
             return []
 
 
-# Global connection manager
-manager = ConnectionManager()
+# Lifespan context manager (replaces deprecated @app.on_event)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage application lifecycle (startup/shutdown)"""
+    global manager
 
-
-@app.on_event("startup")
-async def startup():
+    # Startup
+    manager = ConnectionManager()
     await manager.init_redis()
     await manager.init_kafka()
     manager.init_minio()
@@ -793,11 +819,15 @@ async def startup():
     logger.info(f"📁 MinIO file storage: {'ENABLED' if manager.minio_client else 'DISABLED'}")
     logger.info(f"💓 Health check: {'ENABLED' if manager.health_check_task else 'DISABLED'} (interval: {HEALTH_CHECK_INTERVAL}s)")
 
+    yield
 
-@app.on_event("shutdown")
-async def shutdown():
+    # Shutdown
     logger.info("🛑 Shutting down Chat Service...")
     await manager.cleanup()
+
+
+# Create FastAPI app with lifespan
+app = FastAPI(title="Chat Service", version="2.0.0", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -1166,48 +1196,58 @@ async def simple_file_upload(
     """
     Simple single-part file upload (for small files < 5MB)
     Alternative to multipart upload for convenience
+    Optimized: MinIO operations run in thread pool to avoid blocking async event loop
     """
     if not manager.minio_client:
         raise HTTPException(status_code=503, detail="File upload service unavailable")
-    
+
     try:
         # Generate unique file ID
         file_id = str(uuid4())
         filename = file.filename or "unnamed-file"
-        
-        # Read file content
+
+        # Read file content (async)
         content = await file.read()
         file_size = len(content)
-        
+
         # S3 object key
         object_name = f"{room}/{file_id}/{filename}"
-        
-        # Upload to MinIO
+
+        # Run MinIO operations in thread pool to avoid blocking event loop
+        loop = asyncio.get_event_loop()
+
+        # Upload to MinIO (blocking operation, run in thread pool)
         from io import BytesIO
-        manager.minio_client.put_object(
-            manager.bucket_name,
-            object_name,
-            BytesIO(content),
-            file_size,
-            content_type=file.content_type or "application/octet-stream",
-            metadata={
-                "room": room,
-                "username": username,
-                "original-filename": filename,
-                "upload-timestamp": datetime.utcnow().isoformat()
-            }
+        await loop.run_in_executor(
+            None,  # Use default thread pool
+            lambda: manager.minio_client.put_object(
+                manager.bucket_name,
+                object_name,
+                BytesIO(content),
+                file_size,
+                content_type=file.content_type or "application/octet-stream",
+                metadata={
+                    "room": room,
+                    "username": username,
+                    "original-filename": filename,
+                    "upload-timestamp": datetime.utcnow().isoformat()
+                }
+            )
         )
-        
-        # Generate presigned download URL (7 days)
-        download_url = manager.minio_client.presigned_get_object(
-            manager.bucket_name,
-            object_name,
-            expires=timedelta(days=7)
+
+        # Generate presigned download URL (blocking operation, run in thread pool)
+        download_url = await loop.run_in_executor(
+            None,
+            lambda: manager.minio_client.presigned_get_object(
+                manager.bucket_name,
+                object_name,
+                expires=timedelta(days=7)
+            )
         )
-        
+
         logger.info(f"✓ Simple upload: {filename} ({file_size} bytes) in room {room}")
-        
-        # Create and broadcast file message
+
+        # Create and broadcast file message (now truly instant!)
         file_message = ChatMessage(
             id=str(uuid4()),
             room=room,
@@ -1219,7 +1259,8 @@ async def simple_file_upload(
             file_name=filename,
             file_size=file_size
         )
-        
+
+        # Broadcast immediately - all persistence happens in background
         await manager.broadcast_to_room(room, file_message, store_in_history=True)
         
         return {

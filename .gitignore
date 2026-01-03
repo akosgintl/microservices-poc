@@ -104,3 +104,11 @@ dump.rdb
 # uv (Python package manager)
 .python-version
 uv.lock
+
+# SSL Certificates (private keys should not be committed)
+certs/
+*.key
+*.crt
+*.pem
+
+docs/

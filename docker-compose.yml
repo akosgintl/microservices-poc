@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # =============================================================================
   # INFRASTRUCTURE
@@ -50,6 +48,7 @@ services:
     environment:
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      SERVER_SERVLET_CONTEXT_PATH: /kafka-ui
     networks:
       - microservices-net
 
@@ -77,6 +76,11 @@ services:
       - redis
     ports:
       - "5540:5540"
+    environment:
+      # Configure proxy path for subpath support
+      RIPORT: 5540
+      RIPROXYPATH: /redis-ui
+      RIPROXYPREFIX: /redis-ui
     networks:
       - microservices-net
 
@@ -114,6 +118,7 @@ services:
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_BROWSER_REDIRECT_URL: https://localhost/minio
     command: server /data --console-address ":9001"
     volumes:
       - minio_data:/data
@@ -136,8 +141,9 @@ services:
       context: ./user-service
       dockerfile: Dockerfile
     # Note: No container_name to allow multiple instances
-    ports:
-      - "50051:50051"
+    # Note: No external ports - accessed via NGINX-FE only
+    expose:
+      - "50051"  # Internal port only (not published to host)
     environment:
       GRPC_PORT: 50051
     healthcheck:
@@ -148,6 +154,8 @@ services:
       start_period: 10s
     networks:
       - microservices-net
+    deploy:
+      replicas: 3  # Start with 3 instances for load balancing
 
   # Chat Service - WebSocket (bidirectional real-time)
   # Supports horizontal scaling: docker-compose up -d --scale chat-service=3
@@ -156,8 +164,9 @@ services:
       context: ./chat-service
       dockerfile: Dockerfile
     # Note: No container_name to allow multiple instances
-    ports:
-      - "8010-8019:8001"  # Port range for scaling (avoiding conflict with other services)
+    # Note: No external ports - accessed via NGINX-FE only
+    expose:
+      - "8001"  # Internal port only (not published to host)
     environment:
       PORT: 8001
       REDIS_URL: redis://redis:6379
@@ -184,6 +193,8 @@ services:
       retries: 5
     networks:
       - microservices-net
+    deploy:
+      replicas: 3  # Start with 3 instances for load balancing
 
   # Order Service - REST + Kafka Producer
   # Supports horizontal scaling: docker-compose up -d --scale order-service=3
@@ -192,8 +203,9 @@ services:
       context: ./order-service
       dockerfile: Dockerfile
     # Note: No container_name to allow multiple instances
-    ports:
-      - "8020-8029:8002"  # Port range for scaling (avoiding conflict with other services)
+    # Note: No external ports - accessed via NGINX-FE only
+    expose:
+      - "8002"  # Internal port only (not published to host)
     environment:
       PORT: 8002
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
@@ -210,6 +222,8 @@ services:
       retries: 5
     networks:
       - microservices-net
+    deploy:
+      replicas: 3  # Start with 3 instances for load balancing
 
   # Notification Service - Kafka Consumer + SSE Broadcaster
   # Supports horizontal scaling: docker-compose up -d --scale notification-service=3
@@ -218,8 +232,9 @@ services:
       context: ./notification-service
       dockerfile: Dockerfile
     # Note: No container_name to allow multiple instances
-    ports:
-      - "8030-8039:8003"
+    # Note: No external ports - accessed via NGINX-FE only
+    expose:
+      - "8003"  # Internal port only (not published to host)
     environment:
       PORT: 8003
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
@@ -236,6 +251,8 @@ services:
       retries: 5
     networks:
       - microservices-net
+    deploy:
+      replicas: 3  # Start with 3 instances for load balancing
 
   # Message Persistence Service - Kafka Consumer writing to Cassandra
   # Supports horizontal scaling: docker-compose up -d --scale message-persistence-service=3
@@ -244,8 +261,9 @@ services:
       context: ./message-persistence-service
       dockerfile: Dockerfile
     # Note: No container_name to allow multiple instances
-    ports:
-      - "8040-8049:8004"
+    # Note: No external ports - accessed via NGINX-FE only
+    expose:
+      - "8004"  # Internal port only (not published to host)
     environment:
       PORT: 8004
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
@@ -264,29 +282,98 @@ services:
       retries: 5
     networks:
       - microservices-net
+    deploy:
+      replicas: 3  # Start with 3 instances for load balancing
 
-  # API Gateway - REST, WebSocket proxy, SSE proxy
-  # Supports horizontal scaling: docker-compose up -d --scale api-gateway=3
-  api-gateway:
+  # =============================================================================
+  # LOAD BALANCERS
+  # =============================================================================
+
+  # NGINX Backend Load Balancer - Distributes traffic to backend services
+  # Internal only - used by API Gateway to connect to backend services
+  nginx-be:
     build:
-      context: ./api-gateway
+      context: ./nginx-be
       dockerfile: Dockerfile
-    # Note: No container_name to allow multiple instances
-    ports:
-      - "8000:8000"  # Port range for scaling (avoiding conflict with other services)
-    environment:
-      PORT: 8000
-      USER_SERVICE_GRPC: user-service:50051
-      CHAT_SERVICE_WS: ws://chat-service:8001
-      ORDER_SERVICE_URL: http://order-service:8002
-      NOTIFICATION_SERVICE_URL: http://notification-service:8003
-      MESSAGE_PERSISTENCE_SERVICE_URL: http://message-persistence-service:8004
-      REDIS_URL: redis://redis:6379
+    container_name: nginx-be
+    # No external ports - internal only
+    expose:
+      - "8001"  # Chat Service LB
+      - "8002"  # Order Service LB
+      - "8003"  # Notification Service LB
+      - "8004"  # Message Persistence LB
+      - "50051" # User Service gRPC LB
+      - "8090"  # Health check
     depends_on:
       - user-service
       - chat-service
       - order-service
       - notification-service
+      - message-persistence-service
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8090/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - microservices-net
+    restart: unless-stopped
+
+  # NGINX Frontend Load Balancer - Distributes traffic to API Gateway instances
+  nginx-fe:
+    build:
+      context: ./nginx-fe
+      dockerfile: Dockerfile
+    container_name: nginx-fe
+    ports:
+      - "80:80"    # HTTP
+      - "443:443"  # HTTPS
+    volumes:
+      # Mount SSL certificates from host (generate with ./generate-ssl-cert.sh)
+      - ./certs/nginx-fe.crt:/etc/nginx/ssl/nginx-fe.crt:ro
+      - ./certs/nginx-fe.key:/etc/nginx/ssl/nginx-fe.key:ro
+    depends_on:
+      - api-gateway
+      - redis-ui
+      - kafka-ui
+      - minio
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "--no-check-certificate", "https://localhost/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - microservices-net
+    restart: unless-stopped
+
+  # =============================================================================
+  # API GATEWAY (Behind NGINX Load Balancer)
+  # =============================================================================
+
+  # API Gateway - REST, WebSocket proxy, SSE proxy
+  # Supports horizontal scaling: docker-compose up -d --scale api-gateway=3
+  # Traffic flow: nginx-fe (port 80) → API Gateway instances → nginx-be → Backend services
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    # Note: No container_name to allow multiple instances
+    # Note: No external ports - accessed via NGINX-FE only
+    expose:
+      - "8000"  # Internal port only (not published to host)
+    environment:
+      PORT: 8000
+      # Backend services accessed via nginx-be load balancer
+      USER_SERVICE_GRPC: nginx-be:50051
+      CHAT_SERVICE_WS: ws://nginx-be:8001
+      ORDER_SERVICE_URL: http://nginx-be:8002
+      NOTIFICATION_SERVICE_URL: http://nginx-be:8003
+      MESSAGE_PERSISTENCE_SERVICE_URL: http://nginx-be:8004
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - nginx-be
       - redis
     volumes:
       - ./web-client:/app/static
@@ -297,6 +384,8 @@ services:
       retries: 5
     networks:
       - microservices-net
+    deploy:
+      replicas: 3  # Start with 3 instances for load balancing
 
 volumes:
   kafka_data:

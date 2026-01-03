@@ -25,9 +25,11 @@ import redis.asyncio as redis
 import sys
 sys.path.insert(0, '/app/generated')
 
+# Configure consistent logging format
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger(__name__)
 

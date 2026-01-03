@@ -17,9 +17,11 @@ from pydantic import BaseModel, Field
 from aiokafka import AIOKafkaProducer
 import redis.asyncio as redis
 
+# Configure consistent logging format
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger(__name__)
 
@@ -246,7 +248,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     await kafka_producer.stop()
     if redis_client:
-        await redis_client.close()
+        await redis_client.aclose()
 
 
 app = FastAPI(

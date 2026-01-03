@@ -21,12 +21,15 @@ from pydantic import BaseModel
 from aiokafka import AIOKafkaConsumer
 from cassandra.cluster import Cluster, Session
 from cassandra.auth import PlainTextAuthProvider
+from cassandra.policies import DCAwareRoundRobinPolicy
 from cassandra.query import SimpleStatement, ConsistencyLevel
 import socket
 
+# Configure consistent logging format
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger(__name__)
 
@@ -57,10 +60,12 @@ class CassandraClient:
         try:
             logger.info(f"Connecting to Cassandra at {CASSANDRA_HOSTS}:{CASSANDRA_PORT}")
             
+            # Use load balancing policy to avoid deprecation warning
             self.cluster = Cluster(
                 contact_points=CASSANDRA_HOSTS,
                 port=CASSANDRA_PORT,
-                protocol_version=4
+                protocol_version=4,
+                load_balancing_policy=DCAwareRoundRobinPolicy(local_dc='dc1')
             )
             
             # First connect without keyspace
