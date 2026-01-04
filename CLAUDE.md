@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-This is a microservices proof-of-concept demonstrating modern communication protocols (REST, gRPC, WebSocket, SSE, Kafka) with **two-tier NGINX load balancing**, Redis coordination, and three-tier message persistence (Redis/Kafka/Cassandra).
+This is a microservices proof-of-concept demonstrating modern communication protocols (REST, gRPC, WebSocket, SSE, Kafka) with **two-tier NGINX load balancing**, **HTTPS encryption**, Redis coordination, and three-tier message persistence (Redis/Kafka/Cassandra).
 
 **Architecture:**
-- **nginx-fe** (port 80): External clients → API Gateway instances (frontend load balancer)
+- **nginx-fe** (ports 80/443): External clients → API Gateway instances (frontend load balancer with SSL/TLS)
 - **nginx-be** (internal): API Gateway → Backend services (backend load balancer)
 
-This creates a fully load-balanced architecture where both frontend and backend traffic is distributed.
+This creates a fully load-balanced, HTTPS-encrypted architecture where both frontend and backend traffic is distributed.
 
 ## Common Development Commands
 
@@ -43,7 +43,8 @@ docker compose up --build
 ```bash
 # Check via NGINX load balancer (main entry point)
 make health
-# Or: curl http://localhost/health | python -m json.tool
+# Or via HTTPS (recommended): curl -k https://localhost/health | python -m json.tool
+# Or via HTTP: curl http://localhost/health | python -m json.tool
 
 # Check individual services
 make health-order-service
@@ -63,7 +64,9 @@ make test-sse       # Server-Sent Events
 make test-grpc      # gRPC
 
 # Use web client
-# Open http://localhost (served via NGINX on port 80)
+# Open https://localhost (HTTPS recommended, served via nginx-fe)
+# Or: http://localhost (HTTP also available)
+# Note: Browser will show certificate warning for self-signed cert - this is expected
 ```
 
 ### Horizontal Scaling
@@ -130,7 +133,7 @@ docker compose up --build
 ### Service Communication Flow
 
 ```
-Client → nginx-fe (port 80) [Frontend Load Balancer]
+Client → nginx-fe (ports 80/443 - HTTPS/HTTP) [Frontend Load Balancer + SSL Termination]
          ↓
     API Gateway instances (3x) [load balanced by nginx-fe]
          ↓
@@ -144,18 +147,21 @@ Client → nginx-fe (port 80) [Frontend Load Balancer]
 ```
 
 **Two-tier load balancing:**
-1. **nginx-fe** distributes external traffic across API Gateway instances
+1. **nginx-fe** distributes external traffic across API Gateway instances (with SSL/TLS termination)
 2. **nginx-be** distributes internal traffic across backend service instances
 
 ### Key Patterns
 
-**nginx-fe - Frontend Load Balancer** (Layer 7, port 80):
+**nginx-fe - Frontend Load Balancer** (Layer 7, ports 80/443):
+- SSL/TLS termination with auto-generated self-signed certificate
 - Distributes client traffic to API Gateway instances
 - `least_conn` algorithm for REST/SSE
 - `ip_hash` for WebSocket (session affinity)
 - Health checks on `/health` endpoint
 - Rate limiting: 100 req/s baseline, burst 200
-- Externally accessible
+- Security headers: HSTS, CSP, X-Frame-Options, X-XSS-Protection
+- UI proxy: /redis-ui/, /kafka-ui/, /minio/ (unified HTTPS access)
+- Externally accessible on ports 80 (HTTP) and 443 (HTTPS)
 
 **nginx-be - Backend Load Balancer** (Layer 7 + Layer 4):
 - Distributes API Gateway traffic to backend services
@@ -355,8 +361,17 @@ MESSAGE_PERSISTENCE_SERVICE_URL: http://nginx-be:8004
 ## Important Notes
 
 - **First startup**: Cassandra takes 60-90 seconds to initialize
-- **HTTPS**: Self-signed SSL certificate generated automatically (browsers will warn - this is expected)
-- **Management UIs**: Access via nginx-fe proxy (https://localhost/redis-ui/, /kafka-ui/, /minio/)
+- **HTTPS/SSL**:
+  - Self-signed SSL certificate auto-generated during nginx-fe build
+  - Browsers will show security warning (expected for self-signed certs)
+  - Click "Advanced" → "Proceed to localhost" to continue
+  - Production: Replace with real CA-signed certificate
+  - Certificate location: `/etc/nginx/ssl/nginx-fe.crt` and `.key` (inside container)
+- **Primary Access**: Use `https://localhost` (recommended) or `http://localhost`
+- **Management UIs**: Access via nginx-fe HTTPS proxy for unified access:
+  - https://localhost/redis-ui/ (Redis management)
+  - https://localhost/kafka-ui/ (Kafka management)
+  - https://localhost/minio/ (MinIO console - minioadmin/minioadmin)
 - **WebSocket connections**: Go through nginx-fe with `ip_hash` for session affinity, then through nginx-be to chat service instances
 - **File uploads**: Max 100MB (configurable via `client_max_body_size` in nginx.conf)
 - **Kafka consumer groups**: Use unique group IDs per service to avoid conflicts
@@ -382,7 +397,13 @@ See README.md for detailed testing scenarios, including:
 
 **WebSocket disconnects:**
 - Fixed in current version (missing `python-multipart` dependency)
-- If issues persist, check NGINX logs: `make nginx-logs`
+- If issues persist, check NGINX logs: `make nginx-fe-logs`
+
+**SSL certificate warnings:**
+- Expected behavior for self-signed certificates
+- Click "Advanced" → "Proceed to localhost" in browser
+- For curl: use `-k` or `--insecure` flag
+- Production: Replace with CA-signed certificate
 
 **Kafka not available:**
 - Wait for health check: `docker compose logs kafka | grep "started"`

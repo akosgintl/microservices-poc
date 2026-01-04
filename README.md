@@ -1,6 +1,6 @@
 # Microservices Communication Protocols PoC
 
-A comprehensive, production-ready proof-of-concept demonstrating modern microservices communication patterns: **REST**, **gRPC**, **WebSocket**, **SSE (Server-Sent Events)**, and **Kafka** event-driven architecture with **NGINX load balancing**, horizontal scaling capabilities and **S3-compatible file storage**.
+A comprehensive, production-ready proof-of-concept demonstrating modern microservices communication patterns: **REST**, **gRPC**, **WebSocket**, **SSE (Server-Sent Events)**, and **Kafka** event-driven architecture with **two-tier NGINX load balancing**, **HTTPS encryption**, horizontal scaling capabilities, and **S3-compatible file storage**.
 
 ## 🎯 What You'll Learn
 
@@ -15,16 +15,20 @@ This PoC demonstrates enterprise-level patterns for:
 - **Microservices Patterns**: Service mesh, API gateway, event sourcing, CQRS principles
 
 ✨ **Highlights:**
-- 🔄 **Production-grade Load Balancing** - NGINX with health checks, failover, and rate limiting
-- 🚀 **Horizontally Scalable** - Chat service with Redis coordination, API Gateway with NGINX
+- 🔄 **Two-Tier Load Balancing** - nginx-fe (frontend) + nginx-be (backend) with auto-discovery
+- 🔒 **HTTPS Everywhere** - SSL/TLS encryption with self-signed certificates (production-ready)
+- 🎯 **Unified Management UI** - Redis, Kafka, MinIO accessible via single HTTPS endpoint
+- 🚀 **Horizontally Scalable** - All services scale independently with automatic load distribution
 - 📦 **Containerized** - Full Docker Compose orchestration
 - 🔄 **Event-Driven** - Kafka with KRaft mode (no ZooKeeper)
 - 📁 **File Sharing** - MinIO object storage for file uploads/downloads
-- 💾 **Message Persistence** - Kafka + Cassandra for unlimited history
-- 🌐 **Production Patterns** - Health checks, graceful shutdown, error handling
+- 💾 **Message Persistence** - Three-tier (Redis/Kafka/Cassandra) for optimal performance
+- 🌐 **Production Patterns** - Health checks, failover, rate limiting, security headers
 - 🧪 **Fully Testable** - Web UI + Python clients included
 
 ## Architecture Overview
+
+### Two-Tier Load Balancing Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -39,11 +43,15 @@ This PoC demonstrates enterprise-level patterns for:
                                     │
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                      NGINX LOAD BALANCER (Port 80)                  NEW!   │
+│              TIER 1: nginx-fe (Frontend Load Balancer)                     │
+│                     HTTPS :443 / HTTP :80                                  │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │  • Layer 7 (HTTP/WebSocket/SSE)   • Health checks & failover       │   │
-│  │  • Least-connections algorithm     • Rate limiting (100 req/s)     │   │
-│  │  • Session affinity for WebSocket  • SSL/TLS ready                 │   │
+│  │  • SSL/TLS termination          • Rate limiting (100 req/s)         │   │
+│  │  • Layer 7 HTTP/WebSocket/SSE   • Security headers (HSTS, CSP)      │   │
+│  │  • Least-conn (REST/SSE)        • Unified UI proxy:                 │   │
+│  │  • IP-hash (WebSocket)          •   /redis-ui/ → Redis UI           │   │
+│  │  • Auto-discovery               •   /kafka-ui/ → Kafka UI           │   │
+│  │  • Health checks & failover     •   /minio/ → MinIO Console         │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────────┘
                                     │
@@ -54,65 +62,45 @@ This PoC demonstrates enterprise-level patterns for:
 │  API GATEWAY     │      │  API GATEWAY     │      │  API GATEWAY     │
 │   Instance 1     │      │   Instance 2     │      │   Instance 3     │
 │     :8000        │      │     :8000        │      │     :8000        │
+│  (Internal)      │      │  (Internal)      │      │  (Internal)      │
 └──────────────────┘      └──────────────────┘      └──────────────────┘
           │                         │                         │
           └─────────────────────────┴─────────────────────────┘
                                     │
-          ┌─────────────────────────┼─────────────────────────┐
-          │                         │                         │
-          ▼                         ▼                         ▼
-┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐
-│   USER SERVICE       │  │   CHAT SERVICE       │  │   ORDER SERVICE      │
-│      (gRPC)          │  │    (WebSocket)       │  │   (REST + Kafka)     │
-│       :50051         │  │       :8001          │  │       :8002          │
-│                      │  │                      │  │                      │
-│  • User CRUD         │  │  • Chat rooms        │  │  • Order CRUD        │
-│  • Authentication    │  │  • Bidirectional     │  │  • Kafka producer    │
-│  • Internal only     │  │  • Broadcasting      │  │  • Event publishing  │
-│                      │  │  • Redis cache       │  │                      │
-│                      │  │  • Kafka streaming   │  │                      │
-│                      │  │  • File sharing      │  │                      │
-└──────────────────────┘  └──────────┬───────────┘  └──────────┬───────────┘
-                                     │                         │
-                          ┌──────────┴─────────────────────────┘
-                          │
-                          ▼
-              ┌──────────────────────┐         ┌──────────────────────┐
-              │  APACHE KAFKA 4.1.1  │         │       MINIO          │
-              │    (KRaft mode)      │         │  (S3-compatible)     │
-              │       :9092          │         │   :9000, :9001       │
-              │                      │         │                      │
-              │  Topics:             │         │  • File storage      │
-              │  • chat.messages     │         │  • Presigned URLs    │
-              │  • chat.events       │         │  • Web console       │
-              │  • orders.created    │         └──────────────────────┘
-              │  • orders.updated    │
-              │  • notifications     │
-              └──────────┬───────────┘
-                         │
-         ┌───────────────┴───────────────┐
-         │                               │
-         ▼                               ▼
-┌──────────────────────┐     ┌──────────────────────┐
-│ MESSAGE PERSISTENCE  │     │ NOTIFICATION SERVICE │
-│      SERVICE         │     │  (Kafka Consumer)    │
-│       :8004          │     │       :8003          │
-│                      │     │                      │
-│  • Kafka consumer    │     │  • Event processing  │
-│  • Cassandra writer  │     │  • SSE broadcasting  │
-│                      │     │  • Redis pub/sub     │
-└──────────┬───────────┘     └──────────────────────┘
-           │
-           ▼
-┌──────────────────────┐         ┌──────────────────────┐
-│     CASSANDRA        │         │       REDIS          │
-│   (Full History)     │         │  (Recent Messages)   │
-│       :9042          │         │       :6379          │
-│                      │         │                      │
-│  • chat.messages     │         │  • 10 latest msgs    │
-│  • Unlimited storage │         │  • Pub/Sub hub       │
-│  • Time-series DB    │         │  • Room state        │
-└──────────────────────┘         └──────────────────────┘
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│              TIER 2: nginx-be (Backend Load Balancer)                      │
+│                        Internal Only                                        │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  • HTTP (Layer 7): chat, order, notification, persistence           │   │
+│  │  • gRPC (Layer 4): user service                                     │   │
+│  │  • Least-conn algorithm        • Auto-discovery                     │   │
+│  │  • Health checks & failover    • Connection pooling (keepalive 32)  │   │
+│  │  • Ports: 8001-8004, 50051     • No rate limiting (internal)        │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────┘
+          │              │              │              │              │
+          ▼              ▼              ▼              ▼              ▼
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│ USER SERVICE │  │ CHAT SERVICE │  │ORDER SERVICE │  │NOTIFICATION  │  │ MESSAGE      │
+│   (gRPC)     │  │ (WebSocket)  │  │(REST + Kafka)│  │   SERVICE    │  │ PERSISTENCE  │
+│   :50051     │  │   :8001      │  │   :8002      │  │   :8003      │  │   :8004      │
+└──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘
+        │                   │                   │                │               │
+        │                   └──────────┬────────┴────────────────┴───────────────┘
+        │                              ▼
+        │           ┌──────────────────────────────────┐
+        │           │   INFRASTRUCTURE LAYER           │
+        │           │  ┌─────────────┐ ┌────────────┐  │         ┌──────────────────┐
+        │           │  │   KAFKA     │ │   REDIS    │  │         │      MINIO       │
+        │           │  │   :9092     │ │   :6379    │  │         │ (S3-compatible)  │
+        │           │  └─────────────┘ └────────────┘  │         │  :9000, :9001    │
+        │           │  ┌─────────────┐                 │         └──────────────────┘
+        │           │  │  CASSANDRA  │                 │
+        │           │  │   :9042     │                 │
+        │           │  └─────────────┘                 │
+        │           └──────────────────────────────────┘
+        └────────────────────────────────────────────────┘
 ```
 
 ## 💾 Three-Tier Message Persistence Architecture
@@ -237,7 +225,12 @@ Expected output: All services should show "healthy" status.
 
 ### 3. Access the Web Client
 
-Open your browser: **http://localhost** (port 80, via NGINX load balancer)
+Open your browser: **https://localhost** (HTTPS recommended) or **http://localhost**
+
+**Browser Certificate Warning:**
+Since we use a self-signed SSL certificate, your browser will show a security warning. This is expected and safe for development:
+- Click "Advanced" → "Proceed to localhost (unsafe)"
+- This certificate is auto-generated and used only for local HTTPS encryption
 
 The web client provides an interactive UI to test all protocols:
 - ✅ **REST API Testing** - Create users, manage orders
@@ -255,7 +248,23 @@ The web client provides an interactive UI to test all protocols:
 4. Open the chat, connect to a room, and send messages
 5. Try uploading a file and see it shared with other users in real-time
 
-### 4. Run Python Client Scripts (Optional)
+### 4. Access Management UIs (Optional)
+
+All management UIs are accessible via HTTPS through nginx-fe:
+
+```
+Main App:        https://localhost
+Redis UI:        https://localhost/redis-ui/
+Kafka UI:        https://localhost/kafka-ui/
+MinIO Console:   https://localhost/minio/  (user: minioadmin, pass: minioadmin)
+```
+
+**Benefits:**
+- ✅ **Single URL** - No need to remember multiple ports
+- ✅ **HTTPS Everywhere** - All traffic encrypted
+- ✅ **Unified Access** - Same security context for all UIs
+
+### 5. Run Python Client Scripts (Optional)
 
 ```bash
 # Install client dependencies (if running locally)
@@ -281,23 +290,30 @@ See [`clients/README.md`](clients/README.md) for detailed client documentation.
 
 ## 🏗️ Service Architecture
 
-### NGINX Load Balancer (Port 80) **NEW!**
+### Two-Tier Load Balancing
 
-**Role**: Layer 7 load balancer and traffic distributor  
-**Tech**: NGINX 1.25  
-**Patterns**: Load balancing, health checking, session affinity, rate limiting
+This POC implements a production-ready two-tier NGINX load balancing architecture for maximum scalability and separation of concerns.
 
-The NGINX load balancer sits in front of API Gateway instances and provides:
+### nginx-fe - Frontend Load Balancer (Ports 80, 443)
+
+**Role**: Client-facing load balancer with SSL termination and UI proxy
+**Tech**: NGINX 1.25 with SSL/TLS
+**Patterns**: Load balancing, HTTPS encryption, session affinity, rate limiting, reverse proxy
+
+The frontend load balancer provides:
 
 **Features:**
+- ✅ **SSL/TLS Encryption**: Auto-generated self-signed certificate (production-ready for real certs)
+- ✅ **HTTP & HTTPS**: Dual support on ports 80 (HTTP) and 443 (HTTPS)
 - ✅ **Load Distribution**: Routes traffic using least-connections algorithm
 - ✅ **High Availability**: Automatic failover (max_fails=3, fail_timeout=30s)
 - ✅ **Protocol Support**: REST, WebSocket (with sticky sessions), SSE
 - ✅ **Rate Limiting**: 100 req/sec baseline, burst 200 (configurable)
 - ✅ **Health Checks**: Monitors `/health` endpoint of all instances
 - ✅ **Session Affinity**: IP-hash for WebSocket connections
-- ✅ **Performance**: Keepalive connections, gzip compression
-- ✅ **Security**: Rate limiting, security headers, request size limits
+- ✅ **Performance**: Keepalive connections, gzip compression, HTTP/2
+- ✅ **Security**: HSTS headers, CSP, rate limiting, request size limits
+- ✅ **Unified UI Proxy**: Access Redis UI, Kafka UI, MinIO Console via HTTPS
 
 **Load Balancing Configuration:**
 
@@ -328,11 +344,55 @@ upstream api_gateway_websocket {
 # Scale API Gateway instances
 docker compose up -d --scale api-gateway=5
 
-# NGINX automatically routes to all instances!
+# nginx-fe automatically routes to all instances!
 # No configuration change needed
 ```
 
-See `nginx/README.md` for detailed configuration and `nginx/QUICKSTART.md` for usage guide.
+See `nginx-fe/README.md` for detailed configuration.
+
+### nginx-be - Backend Load Balancer (Internal)
+
+**Role**: Internal load balancer for backend microservices
+**Tech**: NGINX 1.25 with stream module for gRPC
+**Patterns**: Service discovery, load balancing, health checking, protocol translation
+
+The backend load balancer provides:
+
+**Features:**
+- ✅ **HTTP Load Balancing** (Layer 7): Chat, Order, Notification, Persistence services
+- ✅ **gRPC Load Balancing** (Layer 4): User service via stream module
+- ✅ **Auto-Discovery**: Automatically detects scaled backend instances via Docker DNS
+- ✅ **Health Checks**: Monitors backend service health with automatic failover
+- ✅ **Connection Pooling**: Keepalive connections to reduce overhead
+- ✅ **Internal Only**: Not exposed to host, only accessible from API Gateway
+- ✅ **No Rate Limiting**: Trusts internal traffic for maximum throughput
+
+**Ports:**
+- `8001` → Chat Service cluster (WebSocket)
+- `8002` → Order Service cluster (REST)
+- `8003` → Notification Service cluster (SSE)
+- `8004` → Message Persistence Service cluster (HTTP)
+- `50051` → User Service cluster (gRPC)
+- `8090` → nginx-be health check
+
+**Scaling:**
+```bash
+# Scale any backend service
+docker compose up -d --scale chat-service=3
+docker compose up -d --scale order-service=5
+
+# nginx-be automatically routes to all instances!
+# No configuration change needed
+```
+
+**Why Two Tiers?**
+- **Separation of Concerns**: nginx-fe handles client security, nginx-be handles service routing
+- **Independent Scaling**: Scale frontend and backend services independently
+- **Simplified API Gateway**: No need to manage backend instance discovery
+- **Better Observability**: Separate logs for client vs internal traffic
+- **Security Isolation**: Backend services not directly accessible from outside
+
+See `nginx-be/README.md` for detailed configuration.
 
 ### API Gateway (Port 8000)
 
@@ -798,31 +858,50 @@ docker exec -it redis redis-cli MONITOR
 | **Health Check** | | |
 | `HEALTH_CHECK_INTERVAL` | `60` | Connection check interval (seconds) |
 | **Service Discovery** | | |
-| `USER_SERVICE_GRPC` | `user-service:50051` | gRPC address |
-| `ORDER_SERVICE_URL` | `http://order-service:8002` | REST address |
-| `NOTIFICATION_SERVICE_URL` | `http://notification-service:8003` | SSE address |
-| `CHAT_SERVICE_URL` | `http://chat-service:8001` | WebSocket address |
+| `USER_SERVICE_GRPC` | `nginx-be:50051` | gRPC address (via backend LB) |
+| `ORDER_SERVICE_URL` | `http://nginx-be:8002` | REST address (via backend LB) |
+| `NOTIFICATION_SERVICE_URL` | `http://nginx-be:8003` | SSE address (via backend LB) |
+| `CHAT_SERVICE_URL` | `http://nginx-be:8001` | WebSocket address (via backend LB) |
+| `MESSAGE_PERSISTENCE_SERVICE_URL` | `http://nginx-be:8004` | Persistence API (via backend LB) |
 
 ### Port Mapping
 
-| Service | Internal Port | External Port | Protocol | Access |
-|---------|--------------|---------------|----------|---------|
-| **NGINX Load Balancer** | 80 | **80** | HTTP/WS/SSE | **Main entry point** |
-| API Gateway | 8000 | (internal only) | HTTP/WS/SSE | Via NGINX |
-| Chat Service | 8001 | 8011-8020 (scaled) | WebSocket | Internal |
-| Order Service | 8002 | 8002 | HTTP | Internal |
-| Notification Service | 8003 | 8003 | HTTP/SSE | Internal |
-| Message Persistence | 8004 | 8004 | HTTP | Internal |
-| User Service | 50051 | 50051 | gRPC | Internal |
-| Kafka | 9092 | 9092 | Kafka protocol | Internal |
-| Kafka UI | 8080 | 8080 | HTTP | http://localhost:8080 |
-| Redis | 6379 | 6379 | Redis protocol | Internal |
-| Redis UI | 5540 | 5540 | HTTP | http://localhost:5540 |
-| Cassandra | 9042 | 9042 | CQL | Internal |
-| MinIO API | 9000 | 9000 | S3 API | Internal |
-| MinIO Console | 9001 | 9001 | HTTP | http://localhost:9001 |
+#### External Access (Published to Host)
 
-**Important**: All client traffic now goes through NGINX on port 80, not directly to API Gateway on port 8000.
+| Service | Port | Protocol | Access URL | Notes |
+|---------|------|----------|------------|-------|
+| **nginx-fe** | **80** | HTTP | http://localhost | Main HTTP entry point |
+| **nginx-fe** | **443** | HTTPS | **https://localhost** | **Main HTTPS entry point (recommended)** |
+| Kafka UI | 8080 | HTTP | Direct: http://localhost:8080<br>**Proxy: https://localhost/kafka-ui/** | **Use proxy (recommended)** |
+| Redis UI | 5540 | HTTP | Direct: http://localhost:5540<br>**Proxy: https://localhost/redis-ui/** | **Use proxy (recommended)** |
+| MinIO Console | 9001 | HTTP | Direct: http://localhost:9001<br>**Proxy: https://localhost/minio/** | **Use proxy (recommended)** |
+| MinIO API | 9000 | S3 API | http://localhost:9000 | Direct S3 API access |
+| Cassandra | 9042 | CQL | localhost:9042 | Direct database access |
+| Kafka | 9092 | Kafka | localhost:9092 | Direct broker access |
+| Redis | 6379 | Redis | localhost:6379 | Direct cache access |
+
+#### Internal Services (Not Exposed to Host)
+
+| Service | Port | Protocol | Access | Notes |
+|---------|------|----------|--------|-------|
+| **nginx-be** | 8001-8004, 50051 | HTTP/gRPC | Internal only | Backend load balancer |
+| API Gateway | 8000 | HTTP/WS/SSE | Via nginx-fe | 3 instances by default |
+| User Service | 50051 | gRPC | Via nginx-be | Accessed through backend LB |
+| Chat Service | 8001 | WebSocket | Via nginx-be | Scalable instances |
+| Order Service | 8002 | HTTP | Via nginx-be | Scalable instances |
+| Notification Service | 8003 | HTTP/SSE | Via nginx-be | Scalable instances |
+| Message Persistence | 8004 | HTTP | Via nginx-be | Scalable instances |
+
+**Access Pattern:**
+```
+External Client → nginx-fe (80/443) → API Gateway → nginx-be → Backend Services
+```
+
+**Important Changes:**
+- **HTTPS is now the primary access method** - Use `https://localhost` instead of `http://localhost`
+- **Management UIs accessible via HTTPS proxy** - Single unified access point
+- **All client traffic goes through nginx-fe** - Not directly to API Gateway
+- **Backend services accessed via nginx-be** - API Gateway uses backend load balancer
 
 ### Horizontal Scaling
 
@@ -846,13 +925,14 @@ make status
 ```
 
 **Which services can scale horizontally?**
-- ✅ **API Gateway** - NGINX load balances across all instances automatically
-- ✅ **Chat Service** - Full support with Redis coordination
-- ✅ **Order Service** - Stateless, fully scalable
-- ✅ **Notification Service** - Kafka consumer group handles load balancing
-- ✅ **Message Persistence Service** - Multiple instances via Kafka partitions
-- ❌ **User Service** - Single instance in this PoC (can scale with service mesh)
-- ❌ **NGINX** - Single instance (can use external load balancer for NGINX HA)
+- ✅ **API Gateway** - nginx-fe load balances across all instances automatically
+- ✅ **Chat Service** - nginx-be load balances with Redis coordination
+- ✅ **Order Service** - nginx-be load balances, stateless design
+- ✅ **Notification Service** - nginx-be load balances, Kafka consumer groups
+- ✅ **Message Persistence Service** - nginx-be load balances via Kafka partitions
+- ✅ **User Service (gRPC)** - nginx-be stream module handles gRPC load balancing
+- ❌ **nginx-fe** - Single frontend LB (can use external LB for HA)
+- ❌ **nginx-be** - Single backend LB (sufficient for internal traffic)
 
 ## 📊 Observability & Monitoring
 
@@ -875,7 +955,10 @@ grpcurl -plaintext localhost:50051 list
 ### Kafka Monitoring
 
 ```bash
-# Kafka UI
+# Kafka UI (via nginx-fe proxy - recommended)
+open https://localhost/kafka-ui/
+
+# Or direct access
 open http://localhost:8080
 
 # List topics
@@ -897,7 +980,10 @@ docker exec kafka kafka-consumer-groups.sh \
 ### Redis Monitoring
 
 ```bash
-# Redis UI
+# Redis UI (via nginx-fe proxy - recommended)
+open https://localhost/redis-ui/
+
+# Or direct access
 open http://localhost:5540
 
 # Redis CLI
@@ -928,10 +1014,13 @@ docker exec -it cassandra cqlsh
 ### MinIO Monitoring
 
 ```bash
-# MinIO Console
-open http://localhost:9001
+# MinIO Console (via nginx-fe proxy - recommended)
+open https://localhost/minio/
 # Username: minioadmin
 # Password: minioadmin
+
+# Or direct access
+open http://localhost:9001
 
 # Check bucket
 docker exec minio mc ls local/chat-files

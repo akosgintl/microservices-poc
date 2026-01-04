@@ -111,4 +111,5 @@ certs/
 *.crt
 *.pem
 
-docs/
+# only if contains docs to be processed
+# docs/
